@@ -7,22 +7,23 @@ import (
 	"github.com/golang/glog"
 	"github.com/openshift-kni/eco-goinfra/pkg/clients"
 	"github.com/openshift-kni/eco-goinfra/pkg/msg"
-	v1 "k8s.io/api/core/v1"
+	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	corev1Typed "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 // Builder provides struct for configmap object containing connection to the cluster and the configmap definitions.
 type Builder struct {
 	// ConfigMap definition. Used to create configmap object.
-	Definition *v1.ConfigMap
+	Definition *corev1.ConfigMap
 	// Created configmap object.
-	Object *v1.ConfigMap
+	Object *corev1.ConfigMap
 	// Used in functions that defines or mutates configmap definition. errorMsg is processed before the configmap
 	// object is created.
 	errorMsg  string
-	apiClient *clients.Settings
+	apiClient corev1Typed.CoreV1Interface
 }
 
 // AdditionalOptions additional options for configmap object.
@@ -31,9 +32,9 @@ type AdditionalOptions func(builder *Builder) (*Builder, error)
 // Pull retrieves an existing configmap object from the cluster.
 func Pull(apiClient *clients.Settings, name, nsname string) (*Builder, error) {
 	builder := Builder{
-		apiClient: apiClient,
-		Definition: &v1.ConfigMap{
-			ObjectMeta: metaV1.ObjectMeta{
+		apiClient: apiClient.CoreV1Interface,
+		Definition: &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: nsname,
 			},
@@ -43,13 +44,13 @@ func Pull(apiClient *clients.Settings, name, nsname string) (*Builder, error) {
 	if name == "" {
 		glog.V(100).Infof("The name of the configmap is empty")
 
-		builder.errorMsg = "configmap 'name' cannot be empty"
+		return nil, fmt.Errorf("configmap 'name' cannot be empty")
 	}
 
 	if nsname == "" {
 		glog.V(100).Infof("The namespace of the configmap is empty")
 
-		builder.errorMsg = "configmap 'nsname' cannot be empty"
+		return nil, fmt.Errorf("configmap 'nsname' cannot be empty")
 	}
 
 	glog.V(100).Infof(
@@ -69,10 +70,10 @@ func NewBuilder(apiClient *clients.Settings, name, nsname string) *Builder {
 	glog.V(100).Infof(
 		"Initializing new configmap structure with the following params: %s, %s", name, nsname)
 
-	builder := Builder{
-		apiClient: apiClient,
-		Definition: &v1.ConfigMap{
-			ObjectMeta: metaV1.ObjectMeta{
+	builder := &Builder{
+		apiClient: apiClient.CoreV1Interface,
+		Definition: &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: nsname,
 			},
@@ -83,15 +84,19 @@ func NewBuilder(apiClient *clients.Settings, name, nsname string) *Builder {
 		glog.V(100).Infof("The name of the configmap is empty")
 
 		builder.errorMsg = "configmap 'name' cannot be empty"
+
+		return builder
 	}
 
 	if nsname == "" {
 		glog.V(100).Infof("The namespace of the configmap is empty")
 
 		builder.errorMsg = "configmap 'nsname' cannot be empty"
+
+		return builder
 	}
 
-	return &builder
+	return builder
 }
 
 // Create makes a configmap in cluster and stores the created object in struct.
@@ -105,7 +110,7 @@ func (builder *Builder) Create() (*Builder, error) {
 	var err error
 	if !builder.Exists() {
 		builder.Object, err = builder.apiClient.ConfigMaps(builder.Definition.Namespace).Create(
-			context.TODO(), builder.Definition, metaV1.CreateOptions{})
+			context.TODO(), builder.Definition, metav1.CreateOptions{})
 	}
 
 	return builder, err
@@ -124,7 +129,7 @@ func (builder *Builder) Delete() error {
 	}
 
 	err := builder.apiClient.ConfigMaps(builder.Definition.Namespace).Delete(
-		context.TODO(), builder.Object.Name, metaV1.DeleteOptions{})
+		context.TODO(), builder.Object.Name, metav1.DeleteOptions{})
 
 	if err != nil {
 		return err
@@ -132,7 +137,7 @@ func (builder *Builder) Delete() error {
 
 	builder.Object = nil
 
-	return err
+	return nil
 }
 
 // Exists checks whether the given configmap exists.
@@ -147,7 +152,7 @@ func (builder *Builder) Exists() bool {
 
 	var err error
 	builder.Object, err = builder.apiClient.ConfigMaps(builder.Definition.Namespace).Get(
-		context.Background(), builder.Definition.Name, metaV1.GetOptions{})
+		context.TODO(), builder.Definition.Name, metav1.GetOptions{})
 
 	return err == nil || !k8serrors.IsNotFound(err)
 }
@@ -219,13 +224,13 @@ func (builder *Builder) validate() (bool, error) {
 	if builder.Definition == nil {
 		glog.V(100).Infof("The %s is undefined", resourceCRD)
 
-		builder.errorMsg = msg.UndefinedCrdObjectErrString(resourceCRD)
+		return false, fmt.Errorf(msg.UndefinedCrdObjectErrString(resourceCRD))
 	}
 
 	if builder.apiClient == nil {
 		glog.V(100).Infof("The %s builder apiclient is nil", resourceCRD)
 
-		builder.errorMsg = fmt.Sprintf("%s builder cannot have nil apiClient", resourceCRD)
+		return false, fmt.Errorf("%s builder cannot have nil apiClient", resourceCRD)
 	}
 
 	if builder.errorMsg != "" {

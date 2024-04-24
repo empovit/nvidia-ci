@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,7 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
+	netattdefv1 "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/apis/k8s.cni.cncf.io/v1"
+	render "github.com/k8snetworkplumbingwg/sriov-network-operator/pkg/render"
 )
 
 const (
@@ -29,13 +29,6 @@ const (
 	POOLCONFIGFINALIZERNAME = "poolconfig.finalizers.sriovnetwork.openshift.io"
 	ESwithModeLegacy        = "legacy"
 	ESwithModeSwitchDev     = "switchdev"
-
-	SriovCniStateEnable  = "enable"
-	SriovCniStateDisable = "disable"
-	SriovCniStateAuto    = "auto"
-	SriovCniStateOff     = "off"
-	SriovCniStateOn      = "on"
-	SriovCniIpamEmpty    = "\"ipam\":{}"
 )
 
 const invalidVfIndex = -1
@@ -57,13 +50,6 @@ const (
 	SupportedNicIDConfigmap = "supported-nic-ids"
 )
 
-type ConfigurationModeType string
-
-const (
-	DaemonConfigurationMode  ConfigurationModeType = "daemon"
-	SystemdConfigurationMode ConfigurationModeType = "systemd"
-)
-
 func (e NetFilterType) String() string {
 	switch e {
 	case OpenstackNetworkID:
@@ -73,7 +59,7 @@ func (e NetFilterType) String() string {
 	}
 }
 
-func InitNicIDMapFromConfigMap(client kubernetes.Interface, namespace string) error {
+func InitNicIDMap(client *kubernetes.Clientset, namespace string) error {
 	cm, err := client.CoreV1().ConfigMaps(namespace).Get(
 		context.Background(),
 		SupportedNicIDConfigmap,
@@ -86,12 +72,7 @@ func InitNicIDMapFromConfigMap(client kubernetes.Interface, namespace string) er
 	for _, v := range cm.Data {
 		NicIDMap = append(NicIDMap, v)
 	}
-
 	return nil
-}
-
-func InitNicIDMapFromList(idList []string) {
-	NicIDMap = append(NicIDMap, idList...)
 }
 
 func IsSupportedVendor(vendorID string) bool {
@@ -121,7 +102,7 @@ func IsSupportedModel(vendorID, deviceID string) bool {
 			return true
 		}
 	}
-	log.Info("IsSupportedModel(): found unsupported model", "vendorId:", vendorID, "deviceId:", deviceID)
+	log.Info("IsSupportedModel():", "Unsupported model:", "vendorId:", vendorID, "deviceId:", deviceID)
 	return false
 }
 
@@ -236,6 +217,7 @@ func (p *SriovNetworkNodePolicy) Selected(node *corev1.Node) bool {
 		}
 		return false
 	}
+	log.Info("Selected():", "node", node.Name)
 	return true
 }
 
@@ -282,13 +264,12 @@ func (p *SriovNetworkNodePolicy) Apply(state *SriovNetworkNodeState, equalPriori
 		if s.Selected(&iface) {
 			log.Info("Update interface", "name:", iface.Name)
 			result := Interface{
-				PciAddress:        iface.PciAddress,
-				Mtu:               p.Spec.Mtu,
-				Name:              iface.Name,
-				LinkType:          p.Spec.LinkType,
-				EswitchMode:       p.Spec.EswitchMode,
-				NumVfs:            p.Spec.NumVfs,
-				ExternallyManaged: p.Spec.ExternallyManaged,
+				PciAddress:  iface.PciAddress,
+				Mtu:         p.Spec.Mtu,
+				Name:        iface.Name,
+				LinkType:    p.Spec.LinkType,
+				EswitchMode: p.Spec.EswitchMode,
+				NumVfs:      p.Spec.NumVfs,
 			}
 			if p.Spec.NumVfs > 0 {
 				group, err := p.generateVfGroup(&iface)
@@ -391,7 +372,6 @@ func (p *SriovNetworkNodePolicy) generateVfGroup(iface *InterfaceExt) (*VfGroup,
 		PolicyName:   p.GetName(),
 		Mtu:          p.Spec.Mtu,
 		IsRdma:       p.Spec.IsRdma,
-		VdpaType:     p.Spec.VdpaType,
 	}, nil
 }
 
@@ -483,8 +463,8 @@ func (s *SriovNetworkNodeState) GetDriverByPciAddress(addr string) string {
 
 // RenderNetAttDef renders a net-att-def for ib-sriov CNI
 func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
-	logger := log.WithName("RenderNetAttDef")
-	logger.Info("Start to render IB SRIOV CNI NetworkAttachmentDefinition")
+	logger := log.WithName("renderNetAttDef")
+	logger.Info("Start to render IB SRIOV CNI NetworkAttachementDefinition")
 
 	// render RawCNIConfig manifests
 	data := render.MakeRenderData()
@@ -499,12 +479,12 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 
 	data.Data["StateConfigured"] = true
 	switch cr.Spec.LinkState {
-	case SriovCniStateEnable:
-		data.Data["SriovCniState"] = SriovCniStateEnable
-	case SriovCniStateDisable:
-		data.Data["SriovCniState"] = SriovCniStateDisable
-	case SriovCniStateAuto:
-		data.Data["SriovCniState"] = SriovCniStateAuto
+	case "enable":
+		data.Data["SriovCniState"] = "enable"
+	case "disable":
+		data.Data["SriovCniState"] = "disable"
+	case "auto":
+		data.Data["SriovCniState"] = "auto"
 	default:
 		data.Data["StateConfigured"] = false
 	}
@@ -519,7 +499,7 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	if cr.Spec.IPAM != "" {
 		data.Data["SriovCniIpam"] = "\"ipam\":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
 	} else {
-		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
+		data.Data["SriovCniIpam"] = "\"ipam\":{}"
 	}
 
 	// metaplugins for the infiniband cni
@@ -529,17 +509,13 @@ func (cr *SriovIBNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
-	// logLevel and logFile are currently not supports by the ip-sriov-cni -> hardcode them to false.
-	data.Data["LogLevelConfigured"] = false
-	data.Data["LogFileConfigured"] = false
-
 	objs, err := render.RenderDir(ManifestsPath, &data)
 	if err != nil {
 		return nil, err
 	}
 	for _, obj := range objs {
 		raw, _ := json.Marshal(obj)
-		logger.Info("render NetworkAttachmentDefinition output", "raw", string(raw))
+		logger.Info("render NetworkAttachementDefinition output", "raw", string(raw))
 	}
 	return objs[0], nil
 }
@@ -568,8 +544,8 @@ func (cr *SriovIBNetwork) DeleteNetAttDef(c client.Client) error {
 
 // RenderNetAttDef renders a net-att-def for sriov CNI
 func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
-	logger := log.WithName("RenderNetAttDef")
-	logger.Info("Start to render SRIOV CNI NetworkAttachmentDefinition")
+	logger := log.WithName("renderNetAttDef")
+	logger.Info("Start to render SRIOV CNI NetworkAttachementDefinition")
 
 	// render RawCNIConfig manifests
 	data := render.MakeRenderData()
@@ -590,12 +566,6 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["VlanQoSConfigured"] = false
 	}
 
-	data.Data["VlanProtoConfigured"] = false
-	if cr.Spec.VlanProto != "" {
-		data.Data["VlanProtoConfigured"] = true
-		data.Data["SriovCniVlanProto"] = cr.Spec.VlanProto
-	}
-
 	if cr.Spec.Capabilities == "" {
 		data.Data["CapabilitiesConfigured"] = false
 	} else {
@@ -605,32 +575,32 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 
 	data.Data["SpoofChkConfigured"] = true
 	switch cr.Spec.SpoofChk {
-	case SriovCniStateOff:
-		data.Data["SriovCniSpoofChk"] = SriovCniStateOff
-	case SriovCniStateOn:
-		data.Data["SriovCniSpoofChk"] = SriovCniStateOn
+	case "off":
+		data.Data["SriovCniSpoofChk"] = "off"
+	case "on":
+		data.Data["SriovCniSpoofChk"] = "on"
 	default:
 		data.Data["SpoofChkConfigured"] = false
 	}
 
 	data.Data["TrustConfigured"] = true
 	switch cr.Spec.Trust {
-	case SriovCniStateOn:
-		data.Data["SriovCniTrust"] = SriovCniStateOn
-	case SriovCniStateOff:
-		data.Data["SriovCniTrust"] = SriovCniStateOff
+	case "on":
+		data.Data["SriovCniTrust"] = "on"
+	case "off":
+		data.Data["SriovCniTrust"] = "off"
 	default:
 		data.Data["TrustConfigured"] = false
 	}
 
 	data.Data["StateConfigured"] = true
 	switch cr.Spec.LinkState {
-	case SriovCniStateEnable:
-		data.Data["SriovCniState"] = SriovCniStateEnable
-	case SriovCniStateDisable:
-		data.Data["SriovCniState"] = SriovCniStateDisable
-	case SriovCniStateAuto:
-		data.Data["SriovCniState"] = SriovCniStateAuto
+	case "enable":
+		data.Data["SriovCniState"] = "enable"
+	case "disable":
+		data.Data["SriovCniState"] = "disable"
+	case "auto":
+		data.Data["SriovCniState"] = "auto"
 	default:
 		data.Data["StateConfigured"] = false
 	}
@@ -654,7 +624,7 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 	if cr.Spec.IPAM != "" {
 		data.Data["SriovCniIpam"] = "\"ipam\":" + strings.Join(strings.Fields(cr.Spec.IPAM), "")
 	} else {
-		data.Data["SriovCniIpam"] = SriovCniIpamEmpty
+		data.Data["SriovCniIpam"] = "\"ipam\":{}"
 	}
 
 	data.Data["MetaPluginsConfigured"] = false
@@ -663,18 +633,13 @@ func (cr *SriovNetwork) RenderNetAttDef() (*uns.Unstructured, error) {
 		data.Data["MetaPlugins"] = cr.Spec.MetaPluginsConfig
 	}
 
-	data.Data["LogLevelConfigured"] = (cr.Spec.LogLevel != "")
-	data.Data["LogLevel"] = cr.Spec.LogLevel
-	data.Data["LogFileConfigured"] = (cr.Spec.LogFile != "")
-	data.Data["LogFile"] = cr.Spec.LogFile
-
 	objs, err := render.RenderDir(ManifestsPath, &data)
 	if err != nil {
 		return nil, err
 	}
 	for _, obj := range objs {
 		raw, _ := json.Marshal(obj)
-		logger.Info("render NetworkAttachmentDefinition output", "raw", string(raw))
+		logger.Info("render NetworkAttachementDefinition output", "raw", string(raw))
 	}
 	return objs[0], nil
 }

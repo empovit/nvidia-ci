@@ -8,14 +8,15 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/golang/glog"
 	"github.com/openshift-kni/eco-goinfra/pkg/msg"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"github.com/openshift-kni/eco-goinfra/pkg/clients"
-	v1 "k8s.io/api/core/v1"
-	metaV1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/kubectl/pkg/drain"
 )
 
@@ -25,9 +26,9 @@ const (
 
 // Builder provides struct for Node object containing connection to the cluster and the list of Node definitions.
 type Builder struct {
-	Definition  *v1.Node
-	Object      *v1.Node
-	apiClient   *clients.Settings
+	Definition  *corev1.Node
+	Object      *corev1.Node
+	apiClient   kubernetes.Interface
 	errorMsg    string
 	drainHelper *drain.Helper
 }
@@ -54,7 +55,7 @@ func (builder *Builder) SetDrainHelper(
 
 	builder.drainHelper = &drain.Helper{
 		Ctx:    context.TODO(),
-		Client: builder.apiClient.K8sClient,
+		Client: builder.apiClient,
 		// Delete pods that do not declare a controller.
 		Force: force,
 		// GracePeriodSeconds is how long to wait for a pod to terminate.
@@ -117,9 +118,9 @@ func Pull(apiClient *clients.Settings, nodeName string) (*Builder, error) {
 	glog.V(100).Infof("Pulling existing node object: %s", nodeName)
 
 	builder := Builder{
-		apiClient: apiClient,
-		Definition: &v1.Node{
-			ObjectMeta: metaV1.ObjectMeta{
+		apiClient: apiClient.K8sClient,
+		Definition: &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
 				Name: nodeName,
 			},
 		},
@@ -146,12 +147,12 @@ func (builder *Builder) Update() (*Builder, error) {
 		return nil, fmt.Errorf("node %s object doesn't exist", builder.Definition.Name)
 	}
 
-	builder.Definition.CreationTimestamp = metaV1.Time{}
+	builder.Definition.CreationTimestamp = metav1.Time{}
 	builder.Definition.ResourceVersion = ""
 
 	var err error
-	builder.Object, err = builder.apiClient.CoreV1Interface.Nodes().Update(
-		context.TODO(), builder.Definition, metaV1.UpdateOptions{})
+	builder.Object, err = builder.apiClient.CoreV1().Nodes().Update(
+		context.TODO(), builder.Definition, metav1.UpdateOptions{})
 
 	return builder, err
 }
@@ -165,8 +166,8 @@ func (builder *Builder) Exists() bool {
 	glog.V(100).Infof("Checking if node %s exists", builder.Definition.Name)
 
 	var err error
-	builder.Object, err = builder.apiClient.CoreV1Interface.Nodes().Get(
-		context.Background(), builder.Definition.Name, metaV1.GetOptions{})
+	builder.Object, err = builder.apiClient.CoreV1().Nodes().Get(
+		context.TODO(), builder.Definition.Name, metav1.GetOptions{})
 
 	return err == nil || !k8serrors.IsNotFound(err)
 }
@@ -183,10 +184,10 @@ func (builder *Builder) Delete() error {
 		return fmt.Errorf("node cannot be deleted because it does not exist")
 	}
 
-	err := builder.apiClient.CoreV1Interface.Nodes().Delete(
-		context.Background(),
+	err := builder.apiClient.CoreV1().Nodes().Delete(
+		context.TODO(),
 		builder.Definition.Name,
-		metaV1.DeleteOptions{})
+		metav1.DeleteOptions{})
 
 	if err != nil {
 		return fmt.Errorf("can not delete node %s due to %w", builder.Definition.Name, err)
@@ -315,7 +316,7 @@ func (builder *Builder) IsReady() (bool, error) {
 	}
 
 	for _, condition := range builder.Object.Status.Conditions {
-		if condition.Type == v1.NodeReady {
+		if condition.Type == corev1.NodeReady {
 			return condition.Status == isTrue, nil
 		}
 	}
@@ -325,7 +326,7 @@ func (builder *Builder) IsReady() (bool, error) {
 
 // WaitUntilConditionTrue waits for timeout duration or until node gets to a specific status.
 func (builder *Builder) WaitUntilConditionTrue(
-	conditionType v1.NodeConditionType, timeout time.Duration) error {
+	conditionType corev1.NodeConditionType, timeout time.Duration) error {
 	if valid, err := builder.validate(); !valid {
 		return err
 	}
@@ -356,7 +357,7 @@ func (builder *Builder) WaitUntilConditionTrue(
 
 // WaitUntilConditionUnknown waits for timeout duration or until node change specific status.
 func (builder *Builder) WaitUntilConditionUnknown(
-	conditionType v1.NodeConditionType, timeout time.Duration) error {
+	conditionType corev1.NodeConditionType, timeout time.Duration) error {
 	if valid, err := builder.validate(); !valid {
 		return err
 	}
@@ -387,12 +388,12 @@ func (builder *Builder) WaitUntilConditionUnknown(
 
 // WaitUntilReady waits for timeout duration or until node is Ready.
 func (builder *Builder) WaitUntilReady(timeout time.Duration) error {
-	return builder.WaitUntilConditionTrue(v1.NodeReady, timeout)
+	return builder.WaitUntilConditionTrue(corev1.NodeReady, timeout)
 }
 
 // WaitUntilNotReady waits for timeout duration or until node is NotReady.
 func (builder *Builder) WaitUntilNotReady(timeout time.Duration) error {
-	return builder.WaitUntilConditionUnknown(v1.NodeReady, timeout)
+	return builder.WaitUntilConditionUnknown(corev1.NodeReady, timeout)
 }
 
 // validate will check that the builder and builder definition are properly initialized before
