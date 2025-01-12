@@ -1,0 +1,2 @@
+gpu-operator-must-gather.sh
+tests/*/*.test

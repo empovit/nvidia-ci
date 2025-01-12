@@ -32,5 +32,6 @@ RUN make install-ginkgo
 RUN mkdir -p "${ARTIFACT_DIR}" && chmod 777 "${ARTIFACT_DIR}"
 RUN mkdir -p "${GOCACHE}" && chmod 777 "${GOCACHE}"
 RUN chmod 777 /root/nvidia-ci -R
+RUN curl -SsL -o gpu-operator-must-gather.sh -L https://raw.githubusercontent.com/NVIDIA/gpu-operator/main/hack/must-gather.sh && chmod +x gpu-operator-must-gather.sh
 
 ENTRYPOINT ["bash"]

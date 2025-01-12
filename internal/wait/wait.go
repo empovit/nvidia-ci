@@ -26,7 +26,7 @@ func ClusterPolicyReady(apiClient *clients.Settings, clusterPolicyName string, p
 				return false, err
 			}
 
-			if clusterPolicy.Object.Status.State == "ready" {
+			if clusterPolicy.Object != nil && clusterPolicy.Object.Status.State == "ready" {
 				glog.V(gpuparams.GpuLogLevel).Infof("ClusterPolicy %s in now in %s state",
 					clusterPolicy.Object.Name, clusterPolicy.Object.Status.State)
 

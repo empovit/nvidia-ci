@@ -3,8 +3,9 @@ package olm
 import (
 	"context"
 	"fmt"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"time"
+
+	"k8s.io/apimachinery/pkg/util/wait"
 
 	"github.com/golang/glog"
 	oplmV1alpha1 "github.com/operator-framework/api/pkg/operators/v1alpha1"
@@ -229,7 +230,7 @@ func (builder *CatalogSourceBuilder) IsReady(timeout time.Duration) bool {
 				return false, err
 			}
 
-			if builder.Object.Status.GRPCConnectionState.LastObservedState == "READY" {
+			if builder.Object != nil && builder.Object.Status.GRPCConnectionState != nil && builder.Object.Status.GRPCConnectionState.LastObservedState == "READY" {
 				return true, nil
 			}
 

@@ -59,7 +59,6 @@ func ReportIfFailed(
 	}
 
 	dumpDir := inittools.GeneralConfig.GetDumpFailedTestReportLocation(testSuite)
-
 	if dumpDir != "" {
 		reporter, err := newReporter(dumpDir, nSpaces, apiScheme, cRDs)
 
