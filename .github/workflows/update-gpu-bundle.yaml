@@ -31,8 +31,9 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
-          title: Update GPU operator OLM bundle
-          commit-message: |
+          title: "[Automatic] Update GPU operator OLM bundle"
+          commit-message: Update GPU operator OLM bundle
+          body: |
             :warning: Before approving the PR, run `/test 4.18-stable-nvidia-gpu-operator-e2e-master`
             Updates version of the OLM bundle of NVIDIA GPU operator
           delete-branch: true
