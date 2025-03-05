@@ -1,20 +1,5 @@
 #!/usr/bin/env python
 
-# https://docker-docs.uclv.cu/registry/spec/api/
-# https://github.com/orgs/community/discussions/26279
-# https://stackoverflow.com/questions/70458458/how-do-i-simply-run-a-python-script-from-github-repo-with-actions
-
-# Public, doesn't require authentication, but requires pagination
-# curl -SsL -X GET "https://quay.io/v2/openshift-release-dev/ocp-release/tags/list?n=100&last=4.18.0-x86_64" -H 'Content-Type: application/json'
-
-# Public, but requires authentication (haven't figured yet)
-# curl -SsL -X GET https://nvcr.io/v2/nvidia/gpu-operator/tags/list -H 'Content-Type: application/json'
-
-# Public, requires authentication
-# token=$(curl -SsL https://ghcr.io/token\?scope\="repository:nvidia/gpu-operator:pull" | jq -r .token)
-# curl -SsL -X GET https://ghcr.io/v2/nvidia/gpu-operator/gpu-operator-bundle/tags/list -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" | jq
-# curl -SsL -X GET https://ghcr.io/v2/nvidia/gpu-operator/gpu-operator-bundle/manifests/main-latest -H 'Content-Type: application/json' -H "Authorization: Bearer ${token}" | jq -r .config.digest
-
 import requests
 import os
 import base64
