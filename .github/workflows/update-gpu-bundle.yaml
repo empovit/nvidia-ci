@@ -1,0 +1,27 @@
+name: Check for new versions of the NVIDIA GPU operator bundle
+on:
+  # schedule:
+  #   - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to check out'
+        default: 'main'
+        required: false
+        type: string
+jobs:
+  bundle-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ inputs.branch }}
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+            python-version: 3.13
+      - name: Get bundle digest
+        run: python workflows/update_gpu_bundle.py workflows/versions.json
+        env:
+          AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
