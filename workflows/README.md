@@ -1,5 +1,10 @@
 # Scripts and other files for automated workflows
 
+## TODO
+
+* Implement OpenShift versions
+* Implement GPU operator releases
+* Calculate the right tests to run for PR messages
 
 ## Useful links
 
