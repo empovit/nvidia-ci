@@ -39,5 +39,3 @@ jobs:
             Updates version of the OLM bundle of NVIDIA GPU operator
           delete-branch: true
           assignees: empovit,TomerNewman
-          base: main
-
