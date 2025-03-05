@@ -1,0 +1,41 @@
+name: Check for new versions of the NVIDIA GPU operator bundle
+on:
+  # schedule:
+  #   - cron: '30 10 * * *'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to check out'
+        default: 'main'
+        required: false
+        type: string
+jobs:
+  bundle-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the Repo
+        uses: actions/checkout@v2
+        with:
+          ref: ${{ inputs.branch }}
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+            python-version: 3.13
+      - name: Update Bundle Digest
+        run: |
+          pip install requests
+          AUTH_TOKEN=$(echo ${{ secrets.GITHUB_TOKEN }} | base64)
+          python workflows/update_gpu_bundle.py workflows/versions.json
+        env:
+          AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          title: "[Automatic] Update GPU operator OLM bundle"
+          commit-message: Update GPU operator OLM bundle
+          body: |
+            :warning: Before approving the PR, run `/test 4.18-stable-nvidia-gpu-operator-e2e-master`
+
+            Updates version of the OLM bundle of NVIDIA GPU operator
+          delete-branch: true
+          assignees: empovit,TomerNewman
