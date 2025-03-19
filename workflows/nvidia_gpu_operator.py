@@ -20,12 +20,12 @@ version_not_found = '1.0.0'
 def get_operator_versions() -> dict:
 
     logger.info('Calling NVCR authentication API')
-    auth_req = requests.get(gpu_operator_nvcr_auth_url, allow_redirects=True, headers={'Content-Type': 'application/json'})
+    auth_req = requests.get(gpu_operator_nvcr_auth_url, allow_redirects=True, headers={'Content-Type': 'application/json'}, timeout=30)
     auth_req.raise_for_status()
     token = auth_req.json()['token']
 
     logger.info('Listing tags of the GPU operator image')
-    req = requests.get(gpu_operator_nvcr_tags_url, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'})
+    req = requests.get(gpu_operator_nvcr_tags_url, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}, timeout=30)
     req.raise_for_status()
 
     tags = req.json()['tags']
@@ -54,12 +54,12 @@ def get_sha() -> str:
         logger.info('GH_AUTH_TOKEN env variable is available, using it to authenticate against GitHub')
     else:
         logger.info('GH_AUTH_TOKEN is not available, calling GitHub authentication API')
-        auth_req = requests.get(gpu_operator_ghcr_auth_url, allow_redirects=True, headers={'Content-Type': 'application/json'})
+        auth_req = requests.get(gpu_operator_ghcr_auth_url, allow_redirects=True, headers={'Content-Type': 'application/json'}, timeout=30)
         auth_req.raise_for_status()
         token = auth_req.json()['token']
 
     logger.info('Getting digest of the GPU operator OLM bundle')
-    req = requests.get(gpu_operator_ghcr_latest_url, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'})
+    req = requests.get(gpu_operator_ghcr_latest_url, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {token}'}, timeout=30)
     req.raise_for_status()
     config = req.json()['config']
     logger.debug(f'Received GPU operator bundle config: {config}')
