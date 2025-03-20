@@ -26,13 +26,10 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	runtimeClient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	operatorV1 "github.com/openshift/api/operator/v1"
-
 	"k8s.io/client-go/kubernetes/scheme"
 	coreV1Client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	nvidiagpuv1 "github.com/NVIDIA/gpu-operator/api/v1"
-	nvidiagpuv1alpha1 "github.com/NVIDIA/gpu-operator/api/v1alpha1"
 
 	nvidianetworkv1alpha1 "github.com/Mellanox/network-operator/api/v1alpha1"
 
@@ -136,19 +133,11 @@ func SetScheme(crScheme *runtime.Scheme) error {
 		return err
 	}
 
-	if err := operatorV1.Install(crScheme); err != nil {
-		return err
-	}
-
 	if err := olm2.AddToScheme(crScheme); err != nil {
 		return err
 	}
 
 	if err := nvidiagpuv1.AddToScheme(crScheme); err != nil {
-		return err
-	}
-
-	if err := nvidiagpuv1alpha1.AddToScheme(crScheme); err != nil {
 		return err
 	}
 

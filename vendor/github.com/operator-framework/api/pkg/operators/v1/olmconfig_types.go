@@ -1,8 +1,6 @@
 package v1
 
 import (
-	"time"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,16 +23,6 @@ type Features struct {
 	// When reenabled, OLM will recreate the "Copied CSVs" for each
 	// cluster scoped operator.
 	DisableCopiedCSVs *bool `json:"disableCopiedCSVs,omitempty"`
-	// PackageServerSyncInterval is used to define the sync interval for
-	// packagerserver pods. Packageserver pods periodically check the
-	// status of CatalogSources; this specifies the period using duration
-	// format (e.g. "60m"). For this parameter, only hours ("h"), minutes
-	// ("m"), and seconds ("s") may be specified. When not specified, the
-	// period defaults to the value specified within the packageserver.
-	// +optional
-	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+)?(s|m|h))+$"
-	PackageServerSyncInterval *metav1.Duration `json:"packageServerSyncInterval,omitempty"`
 }
 
 // OLMConfigStatus is the status for an OLMConfig resource.
@@ -80,11 +68,4 @@ func (config *OLMConfig) CopiedCSVsAreEnabled() bool {
 	}
 
 	return !*config.Spec.Features.DisableCopiedCSVs
-}
-
-func (config *OLMConfig) PackageServerSyncInterval() *time.Duration {
-	if config == nil || config.Spec.Features == nil || config.Spec.Features.PackageServerSyncInterval == nil {
-		return nil
-	}
-	return &config.Spec.Features.PackageServerSyncInterval.Duration
 }

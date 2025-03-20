@@ -12,10 +12,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // Compatibility level 1: Stable within a major release for a minimum of 12 months or 3 minor releases (whichever is longer).
 // +openshift:compatibility-gen:level=1
 type Network struct {
-	metav1.TypeMeta `json:",inline"`
-
-	// metadata is the standard object's metadata.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
+	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// spec holds user settable values for configuration.
@@ -85,17 +82,6 @@ type NetworkStatus struct {
 
 	// Migration contains the cluster network migration configuration.
 	Migration *NetworkMigration `json:"migration,omitempty"`
-
-	// conditions represents the observations of a network.config current state.
-	// Known .status.conditions.type are: "NetworkTypeMigrationInProgress", "NetworkTypeMigrationMTUReady",
-	// "NetworkTypeMigrationTargetCNIAvailable", "NetworkTypeMigrationTargetCNIInUse"
-	// and "NetworkTypeMigrationOriginalCNIPurged"
-	// +optional
-	// +patchMergeKey=type
-	// +patchStrategy=merge
-	// +listType=map
-	// +listMapKey=type
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // ClusterNetworkEntry is a contiguous block of IP addresses from which pod IPs
@@ -149,9 +135,6 @@ type ExternalIPPolicy struct {
 // +openshift:compatibility-gen:level=1
 type NetworkList struct {
 	metav1.TypeMeta `json:",inline"`
-
-	// metadata is the standard list's metadata.
-	// More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#metadata
 	metav1.ListMeta `json:"metadata"`
 
 	Items []Network `json:"items"`

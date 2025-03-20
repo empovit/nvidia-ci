@@ -239,9 +239,6 @@ const (
 	// BundleLookupPending describes BundleLookups that are not complete.
 	BundleLookupPending BundleLookupConditionType = "BundleLookupPending"
 
-	// BundleLookupFailed describes conditions types for when BundleLookups fail
-	BundleLookupFailed BundleLookupConditionType = "BundleLookupFailed"
-
 	crdKind = "CustomResourceDefinition"
 )
 

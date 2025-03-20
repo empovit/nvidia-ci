@@ -70,8 +70,7 @@ type File struct {
 	Path  string
 	Stmts []Stmt
 
-	Module  interface{} // a *resolve.Module, set by resolver
-	Options *FileOptions
+	Module interface{} // a *resolve.Module, set by resolver
 }
 
 func (x *File) Span() (start, end Position) {
@@ -100,10 +99,9 @@ func (*LoadStmt) stmt()   {}
 func (*ReturnStmt) stmt() {}
 
 // An AssignStmt represents an assignment:
-//
 //	x = 0
 //	x, y = y, x
-//	x += 1
+// 	x += 1
 type AssignStmt struct {
 	commentsRef
 	OpPos Position
@@ -123,9 +121,7 @@ type DefStmt struct {
 	commentsRef
 	Def    Position
 	Name   *Ident
-	Lparen Position
 	Params []Expr // param = ident | ident=expr | * | *ident | **ident
-	Rparen Position
 	Body   []Stmt
 
 	Function interface{} // a *resolve.Function, set by resolver
@@ -255,10 +251,10 @@ func (x *Ident) Span() (start, end Position) {
 // A Literal represents a literal string or number.
 type Literal struct {
 	commentsRef
-	Token    Token // = STRING | BYTES | INT | FLOAT
+	Token    Token // = STRING | INT
 	TokenPos Position
 	Raw      string      // uninterpreted text
-	Value    interface{} // = string | int64 | *big.Int | float64
+	Value    interface{} // = string | int64 | *big.Int
 }
 
 func (x *Literal) Span() (start, end Position) {
@@ -402,6 +398,10 @@ func (x *DictEntry) Span() (start, end Position) {
 }
 
 // A LambdaExpr represents an inline function abstraction.
+//
+// Although they may be added in future, lambda expressions are not
+// currently part of the Starlark spec, so their use is controlled by the
+// resolver.AllowLambda flag.
 type LambdaExpr struct {
 	commentsRef
 	Lambda Position

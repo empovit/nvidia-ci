@@ -26,6 +26,7 @@ type Resource struct {
 	refVarNames []string
 }
 
+// nolint
 var BuildAnnotations = []string{
 	utils.BuildAnnotationPreviousKinds,
 	utils.BuildAnnotationPreviousNames,
@@ -164,17 +165,10 @@ func (r *Resource) CopyMergeMetaDataFieldsFrom(other *Resource) error {
 		mergeStringMaps(other.GetLabels(), r.GetLabels())); err != nil {
 		return fmt.Errorf("copyMerge cannot set labels - %w", err)
 	}
-
-	ra := r.GetAnnotations()
-	_, enableNameSuffixHash := ra[utils.BuildAnnotationsGenAddHashSuffix]
-	merged := mergeStringMapsWithBuildAnnotations(other.GetAnnotations(), ra)
-	if !enableNameSuffixHash {
-		delete(merged, utils.BuildAnnotationsGenAddHashSuffix)
-	}
-	if err := r.SetAnnotations(merged); err != nil {
+	if err := r.SetAnnotations(
+		mergeStringMapsWithBuildAnnotations(other.GetAnnotations(), r.GetAnnotations())); err != nil {
 		return fmt.Errorf("copyMerge cannot set annotations - %w", err)
 	}
-
 	if err := r.SetName(other.GetName()); err != nil {
 		return fmt.Errorf("copyMerge cannot set name - %w", err)
 	}
@@ -262,9 +256,13 @@ func (r *Resource) appendCsvAnnotation(name, value string) {
 	if value == "" {
 		return
 	}
-	currentValue := r.getCsvAnnotation(name)
-	newValue := strings.Join(append(currentValue, value), ",")
-	if err := r.RNode.PipeE(kyaml.SetAnnotation(name, newValue)); err != nil {
+	annotations := r.GetAnnotations()
+	if existing, ok := annotations[name]; ok {
+		annotations[name] = existing + "," + value
+	} else {
+		annotations[name] = value
+	}
+	if err := r.SetAnnotations(annotations); err != nil {
 		panic(err)
 	}
 }

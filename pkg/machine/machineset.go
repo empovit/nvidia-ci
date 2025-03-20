@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
-	machinev1beta1 "github.com/openshift/api/machine/v1beta1"
+	machinev1 "github.com/openshift/api/machine/v1"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/clients"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/msg"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -21,9 +21,9 @@ import (
 type SetBuilder struct {
 	// SetBuilder definition. Used to create
 	// MachineSet object with minimum set of required elements.
-	Definition *machinev1beta1.MachineSet
+	Definition *machinev1.MachineSet
 	// Created SetBuilder object on the cluster.
-	Object *machinev1beta1.MachineSet
+	Object *machinev1.MachineSet
 	// api client to interact with the cluster.
 	apiClient *clients.Settings
 	// errorMsg is processed before SetBuilder object is created.
@@ -121,7 +121,7 @@ func PullSet(apiClient *clients.Settings, name, namespace string) (*SetBuilder, 
 
 	builder := SetBuilder{
 		apiClient: apiClient,
-		Definition: &machinev1beta1.MachineSet{
+		Definition: &machinev1.MachineSet{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: namespace,
@@ -304,7 +304,7 @@ func (builder *SetBuilder) AWSChangeProviderInstanceType(instanceType string) er
 	glog.V(100).Infof("Updating ProviderSpec InstanceType param '%s' for AWS public cloud",
 		instanceType)
 
-	var AWSProviderSpecObject *machinev1beta1.AWSMachineProviderConfig
+	var AWSProviderSpecObject *machinev1.AWSMachineProviderConfig
 	err = json.Unmarshal(byteArray, &AWSProviderSpecObject)
 
 	if err != nil {
@@ -355,7 +355,7 @@ func (builder *SetBuilder) GCPChangeProviderMachineType(machineType string) erro
 
 	glog.V(100).Infof("Updating ProviderSpec MachineType param '%s' for GCP public cloud", machineType)
 
-	var GCPProviderSpecObject *machinev1beta1.GCPMachineProviderSpec
+	var GCPProviderSpecObject *machinev1.GCPMachineProviderSpec
 	err = json.Unmarshal(byteArray, &GCPProviderSpecObject)
 
 	if err != nil {
@@ -406,7 +406,7 @@ func (builder *SetBuilder) AzureChangeProviderVMSize(vmSize string) error {
 	glog.V(100).Infof("Updating ProviderSpec Value VMSize param '%s' for Azure public cloud",
 		vmSize)
 
-	var AzureProviderSpecObject *machinev1beta1.AzureMachineProviderSpec
+	var AzureProviderSpecObject *machinev1.AzureMachineProviderSpec
 	err = json.Unmarshal(byteArray, &AzureProviderSpecObject)
 
 	if err != nil {
@@ -466,7 +466,7 @@ func createNewWorkerMachineSetFromCopy(
 
 	copiedSetBuilder := &SetBuilder{
 		apiClient: apiClient,
-		Definition: &machinev1beta1.MachineSet{
+		Definition: &machinev1.MachineSet{
 			ObjectMeta: *baseSetBuilder.Definition.ObjectMeta.DeepCopy(),
 			Spec:       *baseSetBuilder.Definition.Spec.DeepCopy(),
 		},

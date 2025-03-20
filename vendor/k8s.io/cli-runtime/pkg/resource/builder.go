@@ -45,8 +45,7 @@ import (
 var FileExtensions = []string{".json", ".yaml", ".yml"}
 var InputExtensions = append(FileExtensions, "stdin")
 
-const defaultHttpGetAttempts = 3
-const pathNotExistError = "the path %q does not exist"
+const defaultHttpGetAttempts int = 3
 
 // Builder provides convenience functions for taking arguments and parameters
 // from the command line and converting them to a list of resources to iterate
@@ -78,8 +77,6 @@ type Builder struct {
 	stream     bool
 	stdinInUse bool
 	dir        bool
-
-	visitorConcurrency int
 
 	labelSelector     *string
 	fieldSelector     *string
@@ -232,13 +229,6 @@ func (b *Builder) AddError(err error) *Builder {
 		return b
 	}
 	b.errs = append(b.errs, err)
-	return b
-}
-
-// VisitorConcurrency sets the number of concurrent visitors to use when
-// visiting lists.
-func (b *Builder) VisitorConcurrency(concurrency int) *Builder {
-	b.visitorConcurrency = concurrency
 	return b
 }
 
@@ -426,7 +416,7 @@ func (b *Builder) Path(recursive bool, paths ...string) *Builder {
 	for _, p := range paths {
 		_, err := os.Stat(p)
 		if os.IsNotExist(err) {
-			b.errs = append(b.errs, fmt.Errorf(pathNotExistError, p))
+			b.errs = append(b.errs, fmt.Errorf("the path %q does not exist", p))
 			continue
 		}
 		if err != nil {
@@ -1133,10 +1123,7 @@ func (b *Builder) visitByPaths() *Result {
 	if b.continueOnError {
 		visitors = EagerVisitorList(b.paths)
 	} else {
-		visitors = ConcurrentVisitorList{
-			visitors:    b.paths,
-			concurrency: b.visitorConcurrency,
-		}
+		visitors = VisitorList(b.paths)
 	}
 
 	if b.flatten {
@@ -1226,7 +1213,7 @@ func expandIfFilePattern(pattern string) ([]string, error) {
 	if _, err := os.Stat(pattern); os.IsNotExist(err) {
 		matches, err := filepath.Glob(pattern)
 		if err == nil && len(matches) == 0 {
-			return nil, fmt.Errorf(pathNotExistError, pattern)
+			return nil, fmt.Errorf("the path %q does not exist", pattern)
 		}
 		if err == filepath.ErrBadPattern {
 			return nil, fmt.Errorf("pattern %q is not valid: %v", pattern, err)

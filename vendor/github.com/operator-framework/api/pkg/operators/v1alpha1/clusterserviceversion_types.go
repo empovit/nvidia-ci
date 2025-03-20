@@ -145,14 +145,11 @@ type APIServiceDescription struct {
 	ActionDescriptor  []ActionDescriptor     `json:"actionDescriptors,omitempty"`
 }
 
-// APIResourceReference is a reference to a Kubernetes resource type that the referrer utilizes.
+// APIResourceReference is a Kubernetes resource type used by a custom resource
 // +k8s:openapi-gen=true
 type APIResourceReference struct {
-	// Plural name of the referenced resource type (CustomResourceDefinition.Spec.Names[].Plural). Empty string if the referenced resource type is not a custom resource.
-	Name string `json:"name"`
-	// Kind of the referenced resource type.
-	Kind string `json:"kind"`
-	// API Version of the referenced resource type.
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
 	Version string `json:"version"`
 }
 
@@ -282,34 +279,13 @@ type ClusterServiceVersionSpec struct {
 	WebhookDefinitions        []WebhookDescription      `json:"webhookdefinitions,omitempty"`
 	NativeAPIs                []metav1.GroupVersionKind `json:"nativeAPIs,omitempty"`
 	MinKubeVersion            string                    `json:"minKubeVersion,omitempty"`
-
-	// The name of the operator in display format.
-	DisplayName string `json:"displayName"`
-
-	// Description of the operator. Can include the features, limitations or use-cases of the
-	// operator.
-	// +optional
-	Description string `json:"description,omitempty"`
-
-	// A list of keywords describing the operator.
-	// +optional
-	Keywords []string `json:"keywords,omitempty"`
-
-	// A list of organizational entities maintaining the operator.
-	// +optional
-	Maintainers []Maintainer `json:"maintainers,omitempty"`
-
-	// The publishing entity behind the operator.
-	// +optional
-	Provider AppLink `json:"provider,omitempty"`
-
-	// A list of links related to the operator.
-	// +optional
-	Links []AppLink `json:"links,omitempty"`
-
-	// The icon for this operator.
-	// +optional
-	Icon []Icon `json:"icon,omitempty"`
+	DisplayName               string                    `json:"displayName"`
+	Description               string                    `json:"description,omitempty"`
+	Keywords                  []string                  `json:"keywords,omitempty"`
+	Maintainers               []Maintainer              `json:"maintainers,omitempty"`
+	Provider                  AppLink                   `json:"provider,omitempty"`
+	Links                     []AppLink                 `json:"links,omitempty"`
+	Icon                      []Icon                    `json:"icon,omitempty"`
 
 	// InstallModes specify supported installation types
 	// +optional
