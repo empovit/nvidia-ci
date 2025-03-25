@@ -1,0 +1,66 @@
+name: Generate test matrices pages
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to check out'
+        default: 'main'
+        required: false
+        type: string
+      pr_number:
+        description: 'PR number'
+        required: true
+        type: number
+
+jobs:
+  generate-matrix:
+    # if: startsWith(github.event.pull_request.title, '[Automatic] Update versions')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          pip install -r workflows/test_matrix_dashboard/requirements.txt
+
+      - name: Run extraction script
+        run: |
+          python workflows/test_matrix_dashboard/generate_test_matrix_data.py ${{ inputs.pr_number }}
+          git diff
+        env:
+          MATRIX_DATA_FILE: workflows/test_matrix_dashboard/ocp_data.json
+
+      - name: Commit changes to main
+        run: |
+          echo "==== Committing changes to main ===="
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+          git add workflows/test_matrix_dashboard/ocp_data.json
+          git commit -m "Update test matrix data from PR #${{ inputs.pr_number }}" || echo "No changes to commit"
+          git push origin ${{ inputs.branch }}
+
+      - name: Generate HTML
+        run: |
+          python workflows/test_matrix_dashboard/generate_test_matrix_ui.py
+
+      - name: Deploy
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: gh-pages
+          folder: workflows/test_matrix_dashboard/output
+          token: ${{ secrets.GITHUB_TOKEN }}

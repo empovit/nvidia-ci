@@ -1,2 +1,3 @@
 /workflows/generated-files/
 /workflows/__pycache__/
+/workflows/test_matrix_dashboard/venv/
