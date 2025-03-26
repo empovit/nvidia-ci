@@ -28,7 +28,7 @@ jobs:
           ref: ${{ inputs.branch }}
           path: exec
           sparse-checkout: |
-            nvidia-ci/workflows/test_matrix_dashboard/
+            workflows/test_matrix_dashboard/**
 
       - name: Check out baseline
         uses: actions/checkout@v4
@@ -36,7 +36,7 @@ jobs:
           ref: gh-pages
           path: baseline
           sparse-checkout: |
-            nvidia-ci/old_ocp_data.json
+            old_ocp_data.json
 
       - name: Run extraction script
         run: |
