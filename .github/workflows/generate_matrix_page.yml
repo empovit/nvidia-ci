@@ -28,7 +28,7 @@ jobs:
           ref: ${{ inputs.branch }}
           path: exec
           sparse-checkout: |
-            workflows/test_matrix_dashboard/**
+            workflows/test_matrix_dashboard/*
 
       - name: Check out baseline
         uses: actions/checkout@v4
