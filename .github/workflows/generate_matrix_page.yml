@@ -19,7 +19,6 @@ on:
 
 jobs:
   generate-matrix:
-    # if: startsWith(github.event.pull_request.title, '[Automatic] Update versions')
     runs-on: ubuntu-latest
 
     steps:
@@ -29,7 +28,7 @@ jobs:
           ref: ${{ inputs.branch }}
           path: exec
           sparse-checkout: |
-            workflows/test-matrix-dashboard
+            nvidia-ci/workflows/test_matrix_dashboard/
 
       - name: Check out baseline
         uses: actions/checkout@v4
@@ -37,7 +36,7 @@ jobs:
           ref: gh-pages
           path: baseline
           sparse-checkout: |
-            old_ocp_data.json
+            nvidia-ci/old_ocp_data.json
 
       - name: Run extraction script
         run: |
