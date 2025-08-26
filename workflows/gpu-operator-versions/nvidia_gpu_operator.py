@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 import os
 import re
-
+import sys
 import requests
 
 
-from settings import settings
-from utils import get_logger, max_version
-
-logger = get_logger(__name__)
+from settings import Settings
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
+from utils import logger
+from version_utils import max_version
 
 GPU_OPERATOR_NVCR_AUTH_URL = 'https://nvcr.io/proxy_auth?scope=repository:nvidia/gpu-operator:pull'
 GPU_OPERATOR_NVCR_TAGS_URL = 'https://nvcr.io/v2/nvidia/gpu-operator/tags/list'
@@ -18,7 +18,7 @@ GPU_OPERATOR_GHCR_LATEST_URL = 'https://ghcr.io/v2/nvidia/gpu-operator/gpu-opera
 
 version_not_found = '1.0.0'
 
-def get_operator_versions() -> dict:
+def get_operator_versions(settings: Settings) -> dict:
 
     logger.info('Calling NVCR authentication API')
     auth_req = requests.get(GPU_OPERATOR_NVCR_AUTH_URL,
@@ -53,7 +53,7 @@ def get_operator_versions() -> dict:
 
     return versions
 
-def get_sha() -> str:
+def get_sha(settings: Settings) -> str:
 
     token = os.getenv('GH_AUTH_TOKEN') # In a GitHub workflow, set `GH_AUTH_TOKEN=$(echo ${{ secrets.GITHUB_TOKEN }} | base64)`
     if token:

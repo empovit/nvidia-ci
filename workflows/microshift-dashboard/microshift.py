@@ -7,11 +7,13 @@ import argparse
 import datetime
 import json
 import urllib
+import os
 import requests
+import sys
 
-
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
 from utils import logger
-from generate_ci_dashboard import load_template
+from templates import load_template
 
 # For MicroShift versions 4.19+ we are reusing AI Model Serving job which performs basic validation
 # of the device plugin and more. For older versions we have dedicated

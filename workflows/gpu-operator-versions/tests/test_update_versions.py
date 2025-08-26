@@ -1,6 +1,10 @@
 import copy
 import unittest
-from utils import calculate_diffs, create_tests_matrix
+import sys
+import os
+
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
+from update_versions import calculate_diffs, create_tests_matrix
 
 base_versions = {
     'gpu-main-latest': 'A',

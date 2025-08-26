@@ -1,6 +1,9 @@
 from unittest import TestCase
 from datetime import datetime, timezone
+import os
+import sys
 
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
 from generate_ci_dashboard import (
     build_bundle_info, build_catalog_table_rows)
 

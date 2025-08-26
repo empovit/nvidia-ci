@@ -2,22 +2,16 @@ import json
 import os
 import argparse
 import semver
+import sys
 import re
 
 from typing import Dict, List, Any
 from datetime import datetime, timezone
+
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
 from utils import logger
+from templates import load_template
 
-
-def load_template(filename: str) -> str:
-    """
-    Load and return the contents of a template file.
-    Uses an absolute path based on the script's location.
-    """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(script_dir, "templates", filename)
-    with open(file_path, 'r', encoding='utf-8') as f:
-        return f.read()
 
 
 def generate_test_matrix(ocp_data: Dict[str, List[Dict[str, Any]]]) -> str:
@@ -37,7 +31,7 @@ def generate_test_matrix(ocp_data: Dict[str, List[Dict[str, Any]]]) -> str:
         notes = ocp_data[ocp_key].get("notes")
         results = ocp_data[ocp_key]["tests"]
         regular_results = []
-        bundle_results = []   
+        bundle_results = []
         for r in results:
             if master_pattern.search(r.get("prow_job_url", "")):
                 bundle_results.append(r)

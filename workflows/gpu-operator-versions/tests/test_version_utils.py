@@ -1,5 +1,9 @@
 import unittest
-from utils import get_latest_versions, get_earliest_versions
+import sys
+import os
+
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
+from version_utils import get_latest_versions, get_earliest_versions
 
 class TestGetLatestVersions(unittest.TestCase):
 

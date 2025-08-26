@@ -1,18 +1,20 @@
 #!/usr/bin/env python
 
 import re
+import os
 import requests
 import semver
+import sys
 
-from settings import settings
+from settings import Settings
 from typing import Pattern, AnyStr
-from utils import get_logger, max_version
-
-logger = get_logger(__name__)
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
+from utils import logger
+from version_utils import max_version
 
 RELEASE_URL_API = 'https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestreams/accepted'
 
-def fetch_ocp_versions() -> dict:
+def fetch_ocp_versions(settings: Settings) -> dict:
     """
     Fetches accepted OpenShift versions from the release API.
 

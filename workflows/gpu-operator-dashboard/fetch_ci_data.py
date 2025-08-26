@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 import argparse
 import json
+import re
+import os
+import sys
 import urllib.parse
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
@@ -8,12 +11,21 @@ from typing import Any, Dict, List, Tuple
 import requests
 from pydantic import BaseModel
 
-from utils import logger, GCS_API_BASE_URL, TEST_RESULT_PATH_REGEX, version2suffix
+sys.path.append(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')))
+from utils import logger
 
 
 # =============================================================================
 # Constants
 # =============================================================================
+
+GCS_API_BASE_URL = "https://storage.googleapis.com/storage/v1/b/test-platform-results/o"
+
+# Regular expression to match test result paths.
+TEST_RESULT_PATH_REGEX = re.compile(
+    r"pr-logs/pull/rh-ecosystem-edge_nvidia-ci/\d+/pull-ci-rh-ecosystem-edge-nvidia-ci-main-"
+    r"(?P<ocp_version>\d+\.\d+)-stable-nvidia-gpu-operator-e2e-(?P<gpu_version>\d+-\d+-x|master)/"
+)
 
 # Expected number of slashes for top-level GPU operator E2E finished.json paths
 # Format: pr-logs/pull/org/pr/job/build/finished.json (6 slashes)
@@ -54,6 +66,7 @@ def build_prow_job_url(pr_number: str, ocp_minor: str, gpu_suffix: str, job_id: 
 
 
 # --- Pydantic Model and Domain Model for Test Results ---
+
 
 class TestResultKey(BaseModel):
     ocp_full_version: str
