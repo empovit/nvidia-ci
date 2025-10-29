@@ -167,26 +167,29 @@ def build_repository_cache() -> Dict[str, RepositoryInfo]:
     return cache
 
 
+def _get_unique_repos() -> List[RepositoryInfo]:
+    """Get list of unique repositories from cache."""
+    repos = [r for r in REPO_CACHE.values() if isinstance(r, RepositoryInfo)]
+    return list({r.gcs_name: r for r in repos}.values())
+
+
 def resolve_repository(repo_identifier: Optional[str]) -> RepositoryInfo:
     """Resolve a repository identifier to a RepositoryInfo object."""
-    global REPO_CACHE
-
     # If no identifier provided, check if there's only one repository
-    if repo_identifier is None or repo_identifier == "":
-        repos = list(REPO_CACHE.values())
-        repos = [r for r in repos if isinstance(r, RepositoryInfo)]
-        unique_repos = {r.gcs_name: r for r in repos}.values()
+    if not repo_identifier:
+        unique_repos = _get_unique_repos()
 
-        if len(unique_repos) == 0:
+        if not unique_repos:
             raise ValueError("No repositories configured")
-        elif len(unique_repos) == 1:
-            return list(unique_repos)[0]
-        else:
-            available = [r.full_name for r in unique_repos]
-            raise ValueError(
-                f"Multiple repositories configured. Please specify which repository to use. "
-                f"Available: {', '.join(available)}"
-            )
+
+        if len(unique_repos) == 1:
+            return unique_repos[0]
+
+        available = [r.full_name for r in unique_repos]
+        raise ValueError(
+            f"Multiple repositories configured. Please specify which repository to use. "
+            f"Available: {', '.join(available)}"
+        )
 
     # Try to resolve the identifier
     if repo_identifier in REPO_CACHE:
@@ -288,6 +291,34 @@ def get_build_log(repo_info: RepositoryInfo, pr_number: str, job_name: str, buil
     return fetch_gcs_file(log_path)
 
 
+def _check_build_log_exists(artifacts_prefix: str, path: str) -> bool:
+    """Check if a build-log.txt exists at the given path."""
+    build_log_path = f"{artifacts_prefix}{path}/build-log.txt"
+    return fetch_gcs_file(build_log_path) is not None
+
+
+def _process_step_directory(artifacts_prefix: str, top_dir: str) -> List[Dict[str, Any]]:
+    """Process a single step directory and return its steps."""
+    has_top_level_log = _check_build_log_exists(artifacts_prefix, top_dir)
+
+    if has_top_level_log:
+        return [{"path": top_dir, "has_build_log": True}]
+
+    # Check one level deeper for sub-steps
+    sub_dirs = list_gcs_directories(f"{artifacts_prefix}{top_dir}/")
+    if not sub_dirs:
+        return [{"path": top_dir, "has_build_log": False}]
+
+    # Process sub-directories
+    steps = []
+    for sub_dir in sub_dirs:
+        sub_path = f"{top_dir}/{sub_dir}"
+        has_sub_log = _check_build_log_exists(artifacts_prefix, sub_path)
+        steps.append({"path": sub_path, "has_build_log": has_sub_log})
+
+    return steps
+
+
 def list_build_steps(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str) -> List[Dict[str, Any]]:
     """
     List available steps/artifacts in a build with their nested structure.
@@ -300,34 +331,10 @@ def list_build_steps(repo_info: RepositoryInfo, pr_number: str, job_name: str, b
     # List top-level directories under artifacts/
     top_level_dirs = list_gcs_directories(artifacts_prefix)
 
+    # Process each directory and flatten results
     steps = []
     for top_dir in top_level_dirs:
-        # Check if there's a build-log.txt at this level
-        build_log_path = f"{artifacts_prefix}{top_dir}/build-log.txt"
-        has_top_level_log = fetch_gcs_file(build_log_path) is not None
-
-        if has_top_level_log:
-            steps.append({
-                "path": top_dir,
-                "has_build_log": True
-            })
-        else:
-            # Check one level deeper for sub-steps with build-log.txt
-            sub_dirs = list_gcs_directories(f"{artifacts_prefix}{top_dir}/")
-            if sub_dirs:
-                for sub_dir in sub_dirs:
-                    sub_log_path = f"{artifacts_prefix}{top_dir}/{sub_dir}/build-log.txt"
-                    has_sub_log = fetch_gcs_file(sub_log_path) is not None
-                    steps.append({
-                        "path": f"{top_dir}/{sub_dir}",
-                        "has_build_log": has_sub_log
-                    })
-            else:
-                # No sub-directories, add parent anyway
-                steps.append({
-                    "path": top_dir,
-                    "has_build_log": False
-                })
+        steps.extend(_process_step_directory(artifacts_prefix, top_dir))
 
     return steps
 
@@ -354,27 +361,22 @@ def analyze_log_for_failure(log_content: str) -> str:
     log_end_lower = log_end.lower()
 
     # Check for Prow's final status report
-    if "reporting job state 'succeeded'" in log_end_lower or "reporting job state \"succeeded\"" in log_end_lower:
-        return STATUS_SUCCESS
-    if "reporting job state 'failed'" in log_end_lower or "reporting job state \"failed\"" in log_end_lower:
-        return STATUS_FAILURE
-    if "reporting job state 'aborted'" in log_end_lower or "reporting job state \"aborted\"" in log_end_lower:
-        return STATUS_FAILURE
+    if "reporting job state" in log_end_lower:
+        if "succeeded" in log_end_lower:
+            return STATUS_SUCCESS
+        if "failed" in log_end_lower or "aborted" in log_end_lower:
+            return STATUS_FAILURE
 
     # Fall back to looking for common failure indicators in the full log
+    log_lower = log_content.lower()
+
     failure_patterns = [
-        "FAIL:",
-        "FAILED",
-        "Test failed",
-        "Tests failed",
-        "exit code 1",
-        "exit status 1",
+        "fail:", "failed", "test failed", "tests failed",
+        "exit code 1", "exit status 1",
     ]
 
-    log_lower = log_content.lower()
-    for pattern in failure_patterns:
-        if pattern.lower() in log_lower:
-            return STATUS_FAILURE
+    if any(pattern in log_lower for pattern in failure_patterns):
+        return STATUS_FAILURE
 
     # Check for success indicators
     if "all tests passed" in log_lower:
@@ -473,16 +475,26 @@ def get_pr_jobs_overview(repo_info: RepositoryInfo, pr_number: str) -> Dict[str,
     }
 
 
-def analyze_build_log(log_content: str, max_lines: int = 500) -> Dict[str, Any]:
-    """Analyze build log for error patterns."""
-    lines = log_content.split('\n')
-    total_lines = len(lines)
+def _categorize_error_line(line: str) -> Optional[str]:
+    """Categorize an error line into a specific error type."""
+    line_lower = line.lower()
 
-    # Analyze last N lines for errors
-    analysis_lines = lines[-max_lines:] if len(lines) > max_lines else lines
-    analysis_text = '\n'.join(analysis_lines)
+    if "fail" in line_lower or "failed" in line_lower:
+        return "test_failures"
+    elif "timeout" in line_lower or "timed out" in line_lower:
+        return "timeout_errors"
+    elif "resource" in line_lower and "error" in line_lower:
+        return "resource_errors"
+    elif "build" in line_lower and ("error" in line_lower or "fail" in line_lower):
+        return "build_errors"
+    elif "error" in line_lower:
+        return "other_errors"
 
-    # Extract error patterns
+    return None
+
+
+def _extract_error_patterns(lines: List[str], max_per_category: int = 20) -> Dict[str, List[str]]:
+    """Extract and categorize error patterns from log lines."""
     error_patterns = {
         "test_failures": [],
         "timeout_errors": [],
@@ -491,33 +503,38 @@ def analyze_build_log(log_content: str, max_lines: int = 500) -> Dict[str, Any]:
         "other_errors": [],
     }
 
-    for line in analysis_lines:
-        line_lower = line.lower()
+    for line in lines:
+        category = _categorize_error_line(line)
+        if category and len(error_patterns[category]) < max_per_category:
+            error_patterns[category].append(line.strip())
 
-        if "fail" in line_lower or "failed" in line_lower:
-            error_patterns["test_failures"].append(line.strip())
-        elif "timeout" in line_lower or "timed out" in line_lower:
-            error_patterns["timeout_errors"].append(line.strip())
-        elif "resource" in line_lower and "error" in line_lower:
-            error_patterns["resource_errors"].append(line.strip())
-        elif "build" in line_lower and ("error" in line_lower or "fail" in line_lower):
-            error_patterns["build_errors"].append(line.strip())
-        elif "error" in line_lower:
-            error_patterns["other_errors"].append(line.strip())
+    return error_patterns
 
-    # Limit each category
-    for key in error_patterns:
-        error_patterns[key] = error_patterns[key][:20]  # Top 20 per category
 
-    # Build summary
+def _build_error_summary(error_patterns: Dict[str, List[str]]) -> str:
+    """Build a human-readable summary of error patterns."""
     summary_parts = []
     for key, errors in error_patterns.items():
         if errors:
-            count = len(errors)
             label = key.replace("_", " ").title()
-            summary_parts.append(f"Found {count} {label}")
+            summary_parts.append(f"Found {len(errors)} {label}")
 
-    summary = "; ".join(summary_parts) if summary_parts else "No obvious error patterns found"
+    return "; ".join(summary_parts) if summary_parts else "No obvious error patterns found"
+
+
+def analyze_build_log(log_content: str, max_lines: int = 500) -> Dict[str, Any]:
+    """Analyze build log for error patterns."""
+    lines = log_content.split('\n')
+    total_lines = len(lines)
+
+    # Analyze last N lines for errors
+    analysis_lines = lines[-max_lines:] if len(lines) > max_lines else lines
+
+    # Extract and categorize errors
+    error_patterns = _extract_error_patterns(analysis_lines)
+
+    # Build summary
+    summary = _build_error_summary(error_patterns)
 
     return {
         "log_size_lines": total_lines,
@@ -532,450 +549,366 @@ def analyze_build_log(log_content: str, max_lines: int = 500) -> Dict[str, Any]:
 app = Server("prow-analyzer")
 
 
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    """List available MCP tools."""
-    unique_repos = {r.gcs_name: r for r in REPO_CACHE.values() if isinstance(r, RepositoryInfo)}.values()
+def _get_repository_info() -> tuple[str, str, List[str], bool]:
+    """Get repository configuration info for tool schemas."""
+    unique_repos = _get_unique_repos()
     repo_names = [r.full_name for r in unique_repos]
     repos_str = ", ".join(repo_names)
-
     repo_required = len(repo_names) > 1
 
-    if len(repo_names) == 0:
+    if not repo_names:
         repo_desc = "No repositories configured"
     elif len(repo_names) == 1:
         repo_desc = f"Optional. Defaults to {repo_names[0]} if not specified."
     else:
         repo_desc = f"Repository to analyze. Available: {repos_str}"
 
-    required_fields = ["pr_number"] if not repo_required else ["repository", "pr_number"]
+    return repo_desc, repos_str, ["pr_number"] if not repo_required else ["repository", "pr_number"], repo_required
 
-    return [
-        Tool(
-            name="get_pr_jobs_overview",
-            description=f"Get comprehensive overview of all jobs in a PR including their status, counts, and details. Use this first to understand the state of a PR's CI jobs. Configured repositories: {repos_str}",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                },
-                "required": required_fields,
-            },
+
+def _build_base_properties(repo_desc: str) -> Dict[str, Any]:
+    """Build base properties common to all tools."""
+    return {
+        "repository": {
+            "type": "string",
+            "description": repo_desc,
+        },
+        "pr_number": {
+            "type": "string",
+            "description": "PR number",
+        },
+    }
+
+
+def _build_tool_schema(name: str, description: str, properties: Dict[str, Any], required: List[str]) -> Tool:
+    """Build a tool schema with the given parameters."""
+    return Tool(
+        name=name,
+        description=description,
+        inputSchema={
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        },
+    )
+
+
+@app.list_tools()
+async def list_tools() -> list[Tool]:
+    """List available MCP tools."""
+    repo_desc, repos_str, base_required, _ = _get_repository_info()
+    base_props = _build_base_properties(repo_desc)
+
+    # Simple tools with only base properties
+    tools = [
+        _build_tool_schema(
+            "get_pr_jobs_overview",
+            f"Get comprehensive overview of all jobs in a PR including their status, counts, and details. Use this first to understand the state of a PR's CI jobs. Configured repositories: {repos_str}",
+            base_props,
+            base_required
         ),
-        Tool(
-            name="list_failed_jobs",
-            description=f"List all Prow jobs where the latest build failed. Configured repositories: {repos_str}",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                },
-                "required": required_fields,
-            },
-        ),
-        Tool(
-            name="get_build_log",
-            description="Fetch build log for a specific job build.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                    "job_name": {
-                        "type": "string",
-                        "description": "Job name",
-                    },
-                    "build_id": {
-                        "type": "string",
-                        "description": "Build ID",
-                    },
-                },
-                "required": required_fields + ["job_name", "build_id"],
-            },
-        ),
-        Tool(
-            name="list_build_steps",
-            description="List available steps/artifacts in a build. Useful for identifying which steps failed.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                    "job_name": {
-                        "type": "string",
-                        "description": "Job name",
-                    },
-                    "build_id": {
-                        "type": "string",
-                        "description": "Build ID",
-                    },
-                },
-                "required": required_fields + ["job_name", "build_id"],
-            },
-        ),
-        Tool(
-            name="get_step_build_log",
-            description="Fetch build log for a specific step/artifact within a job build. Use list_build_steps first to see available steps.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                    "job_name": {
-                        "type": "string",
-                        "description": "Job name",
-                    },
-                    "build_id": {
-                        "type": "string",
-                        "description": "Build ID",
-                    },
-                    "step_name": {
-                        "type": "string",
-                        "description": "Step/artifact name",
-                    },
-                },
-                "required": required_fields + ["job_name", "build_id", "step_name"],
-            },
-        ),
-        Tool(
-            name="analyze_failed_job",
-            description="Analyze a failed job by extracting error patterns from the build log.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                    "job_name": {
-                        "type": "string",
-                        "description": "Job name",
-                    },
-                    "build_id": {
-                        "type": "string",
-                        "description": "Build ID",
-                    },
-                    "max_log_lines": {
-                        "type": "integer",
-                        "description": "Maximum lines to analyze from end of log (default: 500)",
-                        "default": 500,
-                    },
-                },
-                "required": required_fields + ["job_name", "build_id"],
-            },
-        ),
-        Tool(
-            name="analyze_all_failed_jobs",
-            description="Analyze all failed jobs for a PR.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repository": {
-                        "type": "string",
-                        "description": repo_desc,
-                    },
-                    "pr_number": {
-                        "type": "string",
-                        "description": "PR number",
-                    },
-                    "max_log_lines": {
-                        "type": "integer",
-                        "description": "Maximum lines to analyze per log (default: 500)",
-                        "default": 500,
-                    },
-                },
-                "required": required_fields,
-            },
+        _build_tool_schema(
+            "list_failed_jobs",
+            f"List all Prow jobs where the latest build failed. Configured repositories: {repos_str}",
+            base_props,
+            base_required
         ),
     ]
 
+    # Tools with job_name and build_id
+    job_build_props = {**base_props,
+        "job_name": {"type": "string", "description": "Job name"},
+        "build_id": {"type": "string", "description": "Build ID"},
+    }
 
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls."""
+    tools.extend([
+        _build_tool_schema(
+            "get_build_log",
+            "Fetch build log for a specific job build.",
+            job_build_props,
+            base_required + ["job_name", "build_id"]
+        ),
+        _build_tool_schema(
+            "list_build_steps",
+            "List available steps/artifacts in a build. Useful for identifying which steps failed.",
+            job_build_props,
+            base_required + ["job_name", "build_id"]
+        ),
+    ])
 
-    if name == "get_pr_jobs_overview":
-        repo_identifier = arguments.get("repository")
+    # Tool with step_name
+    step_props = {**job_build_props,
+        "step_name": {"type": "string", "description": "Step/artifact name"},
+    }
+    tools.append(_build_tool_schema(
+        "get_step_build_log",
+        "Fetch build log for a specific step/artifact within a job build. Use list_build_steps first to see available steps.",
+        step_props,
+        base_required + ["job_name", "build_id", "step_name"]
+    ))
+
+    # Tool with max_log_lines
+    analyze_job_props = {**job_build_props,
+        "max_log_lines": {
+            "type": "integer",
+            "description": "Maximum lines to analyze from end of log (default: 500)",
+            "default": 500,
+        },
+    }
+    tools.append(_build_tool_schema(
+        "analyze_failed_job",
+        "Analyze a failed job by extracting error patterns from the build log.",
+        analyze_job_props,
+        base_required + ["job_name", "build_id"]
+    ))
+
+    # Tool for analyzing all failed jobs
+    analyze_all_props = {**base_props,
+        "max_log_lines": {
+            "type": "integer",
+            "description": "Maximum lines to analyze per log (default: 500)",
+            "default": 500,
+        },
+    }
+    tools.append(_build_tool_schema(
+        "analyze_all_failed_jobs",
+        "Analyze all failed jobs for a PR.",
+        analyze_all_props,
+        base_required
+    ))
+
+    return tools
+
+
+def _handle_error(error: Exception) -> list[TextContent]:
+    """Create error response for tool calls."""
+    return [TextContent(
+        type="text",
+        text=json.dumps({"error": str(error)}, indent=2),
+    )]
+
+
+def _handle_success(data: Any) -> list[TextContent]:
+    """Create success response for tool calls."""
+    return [TextContent(
+        type="text",
+        text=json.dumps(data, indent=2),
+    )]
+
+
+def _handle_get_pr_jobs_overview(arguments: dict) -> list[TextContent]:
+    """Handle get_pr_jobs_overview tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
+        overview = get_pr_jobs_overview(repo_info, arguments["pr_number"])
+        return _handle_success(overview)
+    except Exception as e:
+        return _handle_error(e)
+
+
+def _handle_list_failed_jobs(arguments: dict) -> list[TextContent]:
+    """Handle list_failed_jobs tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
         pr_number = arguments["pr_number"]
+        failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            overview = get_pr_jobs_overview(repo_info, pr_number)
+        if not failed_jobs:
+            result = {
+                "message": f"No failed jobs found for {repo_info.full_name} PR #{pr_number}",
+                "repository": repo_info.full_name,
+                "pr_number": pr_number,
+                "failed_jobs_count": 0,
+            }
+        else:
+            result = {
+                "repository": repo_info.full_name,
+                "pr_number": pr_number,
+                "failed_jobs_count": len(failed_jobs),
+                "failed_jobs": [build.to_dict() for build in failed_jobs.values()],
+            }
 
-            return [TextContent(
-                type="text",
-                text=json.dumps(overview, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
 
-    elif name == "list_failed_jobs":
-        repo_identifier = arguments.get("repository")
-        pr_number = arguments["pr_number"]
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
-
-            if not failed_jobs:
-                result = {
-                    "message": f"No failed jobs found for {repo_info.full_name} PR #{pr_number}",
-                    "repository": repo_info.full_name,
-                    "pr_number": pr_number,
-                    "failed_jobs_count": 0,
-                }
-            else:
-                result = {
-                    "repository": repo_info.full_name,
-                    "pr_number": pr_number,
-                    "failed_jobs_count": len(failed_jobs),
-                    "failed_jobs": [build.to_dict() for build in failed_jobs.values()],
-                }
-
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
-
-    elif name == "get_build_log":
-        repo_identifier = arguments.get("repository")
+def _handle_get_build_log(arguments: dict) -> list[TextContent]:
+    """Handle get_build_log tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
         pr_number = arguments["pr_number"]
         job_name = arguments["job_name"]
         build_id = arguments["build_id"]
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            log_content = get_build_log(repo_info, pr_number, job_name, build_id)
+        log_content = get_build_log(repo_info, pr_number, job_name, build_id)
 
-            if not log_content:
-                return [TextContent(
-                    type="text",
-                    text=json.dumps({"error": "Build log not found"}, indent=2),
-                )]
+        if not log_content:
+            return _handle_error(ValueError("Build log not found"))
 
-            result = {
-                "repository": repo_info.full_name,
-                "pr_number": pr_number,
-                "job_name": job_name,
-                "build_id": build_id,
-                "log_size_bytes": len(log_content),
-                "log_size_lines": len(log_content.split('\n')),
-                "log_content": log_content,
-            }
+        result = {
+            "repository": repo_info.full_name,
+            "pr_number": pr_number,
+            "job_name": job_name,
+            "build_id": build_id,
+            "log_size_bytes": len(log_content),
+            "log_size_lines": len(log_content.split('\n')),
+            "log_content": log_content,
+        }
 
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
 
-    elif name == "list_build_steps":
-        repo_identifier = arguments.get("repository")
+
+def _handle_list_build_steps(arguments: dict) -> list[TextContent]:
+    """Handle list_build_steps tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
         pr_number = arguments["pr_number"]
         job_name = arguments["job_name"]
         build_id = arguments["build_id"]
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            steps = list_build_steps(repo_info, pr_number, job_name, build_id)
+        steps = list_build_steps(repo_info, pr_number, job_name, build_id)
 
-            # Separate steps with and without build logs
-            steps_with_logs = [s for s in steps if s.get("has_build_log")]
-            steps_without_logs = [s for s in steps if not s.get("has_build_log")]
+        # Separate steps with and without build logs
+        steps_with_logs = [s for s in steps if s.get("has_build_log")]
 
-            result = {
-                "repository": repo_info.full_name,
-                "pr_number": pr_number,
-                "job_name": job_name,
-                "build_id": build_id,
-                "total_steps": len(steps),
-                "steps_with_build_logs": len(steps_with_logs),
-                "steps": steps,
-                "summary": f"Found {len(steps)} steps, {len(steps_with_logs)} have build logs available"
-            }
+        result = {
+            "repository": repo_info.full_name,
+            "pr_number": pr_number,
+            "job_name": job_name,
+            "build_id": build_id,
+            "total_steps": len(steps),
+            "steps_with_build_logs": len(steps_with_logs),
+            "steps": steps,
+            "summary": f"Found {len(steps)} steps, {len(steps_with_logs)} have build logs available"
+        }
 
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
 
-    elif name == "get_step_build_log":
-        repo_identifier = arguments.get("repository")
+
+def _handle_get_step_build_log(arguments: dict) -> list[TextContent]:
+    """Handle get_step_build_log tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
         pr_number = arguments["pr_number"]
         job_name = arguments["job_name"]
         build_id = arguments["build_id"]
         step_name = arguments["step_name"]
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            log_content = get_step_build_log(repo_info, pr_number, job_name, build_id, step_name)
+        log_content = get_step_build_log(repo_info, pr_number, job_name, build_id, step_name)
 
-            if not log_content:
-                return [TextContent(
-                    type="text",
-                    text=json.dumps({"error": f"Build log not found for step '{step_name}'"}, indent=2),
-                )]
+        if not log_content:
+            return _handle_error(ValueError(f"Build log not found for step '{step_name}'"))
 
-            result = {
-                "repository": repo_info.full_name,
-                "pr_number": pr_number,
-                "job_name": job_name,
-                "build_id": build_id,
-                "step_name": step_name,
-                "log_size_bytes": len(log_content),
-                "log_size_lines": len(log_content.split('\n')),
-                "log_content": log_content,
-            }
+        result = {
+            "repository": repo_info.full_name,
+            "pr_number": pr_number,
+            "job_name": job_name,
+            "build_id": build_id,
+            "step_name": step_name,
+            "log_size_bytes": len(log_content),
+            "log_size_lines": len(log_content.split('\n')),
+            "log_content": log_content,
+        }
 
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
 
-    elif name == "analyze_failed_job":
-        repo_identifier = arguments.get("repository")
+
+def _handle_analyze_failed_job(arguments: dict) -> list[TextContent]:
+    """Handle analyze_failed_job tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
         pr_number = arguments["pr_number"]
         job_name = arguments["job_name"]
         build_id = arguments["build_id"]
         max_log_lines = arguments.get("max_log_lines", 500)
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            log_content = get_build_log(repo_info, pr_number, job_name, build_id)
+        log_content = get_build_log(repo_info, pr_number, job_name, build_id)
 
-            if not log_content:
-                return [TextContent(
-                    type="text",
-                    text=json.dumps({"error": "Build log not found"}, indent=2),
-                )]
+        if not log_content:
+            return _handle_error(ValueError("Build log not found"))
 
-            analysis = analyze_build_log(log_content, max_log_lines)
+        analysis = analyze_build_log(log_content, max_log_lines)
+
+        result = {
+            "repository": repo_info.full_name,
+            "pr_number": pr_number,
+            "job_name": job_name,
+            "build_id": build_id,
+            "analysis": analysis,
+        }
+
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
+
+
+def _handle_analyze_all_failed_jobs(arguments: dict) -> list[TextContent]:
+    """Handle analyze_all_failed_jobs tool call."""
+    try:
+        repo_info = resolve_repository(arguments.get("repository"))
+        pr_number = arguments["pr_number"]
+        max_log_lines = arguments.get("max_log_lines", 500)
+
+        failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
+
+        if not failed_jobs:
+            result = {
+                "message": f"No failed jobs found for {repo_info.full_name} PR #{pr_number}",
+                "repository": repo_info.full_name,
+                "pr_number": pr_number,
+                "failed_jobs_count": 0,
+            }
+        else:
+            analyses = []
+            for job_name, build in failed_jobs.items():
+                log_content = get_build_log(repo_info, pr_number, job_name, build.build_id)
+                if log_content:
+                    analysis = analyze_build_log(log_content, max_log_lines)
+                    analyses.append({
+                        "job_info": build.to_dict(),
+                        "analysis": analysis,
+                    })
 
             result = {
                 "repository": repo_info.full_name,
                 "pr_number": pr_number,
-                "job_name": job_name,
-                "build_id": build_id,
-                "analysis": analysis,
+                "failed_jobs_count": len(failed_jobs),
+                "analyses": analyses,
             }
 
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
 
-    elif name == "analyze_all_failed_jobs":
-        repo_identifier = arguments.get("repository")
-        pr_number = arguments["pr_number"]
-        max_log_lines = arguments.get("max_log_lines", 500)
 
-        try:
-            repo_info = resolve_repository(repo_identifier)
-            failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
+# Tool handler registry
+TOOL_HANDLERS = {
+    "get_pr_jobs_overview": _handle_get_pr_jobs_overview,
+    "list_failed_jobs": _handle_list_failed_jobs,
+    "get_build_log": _handle_get_build_log,
+    "list_build_steps": _handle_list_build_steps,
+    "get_step_build_log": _handle_get_step_build_log,
+    "analyze_failed_job": _handle_analyze_failed_job,
+    "analyze_all_failed_jobs": _handle_analyze_all_failed_jobs,
+}
 
-            if not failed_jobs:
-                result = {
-                    "message": f"No failed jobs found for {repo_info.full_name} PR #{pr_number}",
-                    "repository": repo_info.full_name,
-                    "pr_number": pr_number,
-                    "failed_jobs_count": 0,
-                }
-            else:
-                analyses = []
-                for job_name, build in failed_jobs.items():
-                    log_content = get_build_log(repo_info, pr_number, job_name, build.build_id)
-                    if log_content:
-                        analysis = analyze_build_log(log_content, max_log_lines)
-                        analyses.append({
-                            "job_info": build.to_dict(),
-                            "analysis": analysis,
-                        })
 
-                result = {
-                    "repository": repo_info.full_name,
-                    "pr_number": pr_number,
-                    "failed_jobs_count": len(failed_jobs),
-                    "analyses": analyses,
-                }
+@app.call_tool()
+async def call_tool(name: str, arguments: dict) -> list[TextContent]:
+    """Handle tool calls by dispatching to appropriate handler."""
+    handler = TOOL_HANDLERS.get(name)
 
-            return [TextContent(
-                type="text",
-                text=json.dumps(result, indent=2),
-            )]
-        except Exception as e:
-            return [TextContent(
-                type="text",
-                text=json.dumps({"error": str(e)}, indent=2),
-            )]
+    if handler:
+        return handler(arguments)
 
-    else:
-        return [TextContent(
-            type="text",
-            text=json.dumps({"error": f"Unknown tool: {name}"}, indent=2),
-        )]
+    return _handle_error(ValueError(f"Unknown tool: {name}"))
 
 
 async def main():
@@ -990,11 +923,10 @@ async def main():
 
     # Log configuration
     import sys
-    unique_repos = {r.gcs_name: r for r in REPO_CACHE.values() if isinstance(r, RepositoryInfo)}.values()
-    repo_count = len(list(unique_repos))
+    unique_repos = _get_unique_repos()
     repo_names = [r.full_name for r in unique_repos]
 
-    print(f"Loaded configuration: {repo_count} repositories configured", file=sys.stderr, flush=True)
+    print(f"Loaded configuration: {len(unique_repos)} repositories configured", file=sys.stderr, flush=True)
     print(f"Repositories: {', '.join(repo_names)}", file=sys.stderr, flush=True)
     print(f"GCS Bucket: {CONFIG.get('gcs_bucket')}", file=sys.stderr, flush=True)
 
