@@ -288,18 +288,56 @@ def get_build_log(repo_info: RepositoryInfo, pr_number: str, job_name: str, buil
     return fetch_gcs_file(log_path)
 
 
-def list_build_steps(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str) -> List[str]:
-    """List available steps/artifacts in a build."""
+def list_build_steps(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str) -> List[Dict[str, Any]]:
+    """
+    List available steps/artifacts in a build with their nested structure.
+
+    Returns a list of dicts with 'path' and 'has_build_log' keys.
+    """
     pr_path = build_pr_path(repo_info, pr_number)
     artifacts_prefix = f"{pr_path}/{job_name}/{build_id}/artifacts/"
 
-    # List directories under artifacts/
-    steps = list_gcs_directories(artifacts_prefix)
+    # List top-level directories under artifacts/
+    top_level_dirs = list_gcs_directories(artifacts_prefix)
+
+    steps = []
+    for top_dir in top_level_dirs:
+        # Check if there's a build-log.txt at this level
+        build_log_path = f"{artifacts_prefix}{top_dir}/build-log.txt"
+        has_top_level_log = fetch_gcs_file(build_log_path) is not None
+
+        if has_top_level_log:
+            steps.append({
+                "path": top_dir,
+                "has_build_log": True
+            })
+        else:
+            # Check one level deeper for sub-steps with build-log.txt
+            sub_dirs = list_gcs_directories(f"{artifacts_prefix}{top_dir}/")
+            if sub_dirs:
+                for sub_dir in sub_dirs:
+                    sub_log_path = f"{artifacts_prefix}{top_dir}/{sub_dir}/build-log.txt"
+                    has_sub_log = fetch_gcs_file(sub_log_path) is not None
+                    steps.append({
+                        "path": f"{top_dir}/{sub_dir}",
+                        "has_build_log": has_sub_log
+                    })
+            else:
+                # No sub-directories, add parent anyway
+                steps.append({
+                    "path": top_dir,
+                    "has_build_log": False
+                })
+
     return steps
 
 
 def get_step_build_log(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, step_name: str) -> Optional[str]:
-    """Fetch build log for a specific step/artifact."""
+    """
+    Fetch build log for a specific step/artifact.
+
+    step_name can be either a top-level step or a nested path like "parent/substep".
+    """
     pr_path = build_pr_path(repo_info, pr_number)
     log_path = f"{pr_path}/{job_name}/{build_id}/artifacts/{step_name}/build-log.txt"
 
@@ -789,13 +827,19 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             repo_info = resolve_repository(repo_identifier)
             steps = list_build_steps(repo_info, pr_number, job_name, build_id)
 
+            # Separate steps with and without build logs
+            steps_with_logs = [s for s in steps if s.get("has_build_log")]
+            steps_without_logs = [s for s in steps if not s.get("has_build_log")]
+
             result = {
                 "repository": repo_info.full_name,
                 "pr_number": pr_number,
                 "job_name": job_name,
                 "build_id": build_id,
-                "steps_count": len(steps),
+                "total_steps": len(steps),
+                "steps_with_build_logs": len(steps_with_logs),
                 "steps": steps,
+                "summary": f"Found {len(steps)} steps, {len(steps_with_logs)} have build logs available"
             }
 
             return [TextContent(
