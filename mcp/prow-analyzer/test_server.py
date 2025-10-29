@@ -11,7 +11,6 @@ from typing import Optional, Tuple, List
 from mcp_server import (
     get_failed_jobs_for_pr,
     get_build_log,
-    analyze_build_log,
     load_config,
     build_repository_cache,
     resolve_repository,
@@ -20,7 +19,6 @@ from mcp_server import (
 # Constants
 SEPARATOR = "=" * 80
 HEADER_SEPARATOR = "#" * 80
-DEFAULT_LOG_LINES = 100
 
 
 def print_test_header(test_name: str, repo_full_name: str, pr_number: str) -> None:
@@ -40,21 +38,21 @@ def print_failed_job_details(job_name: str, build) -> None:
     print()
 
 
-def print_analysis_summary(analysis: dict) -> None:
-    """Print analysis results summary."""
-    error_patterns = analysis['error_patterns']
+def print_log_preview(log_content: str, num_lines: int = 20) -> None:
+    """Print a preview of the log content."""
+    lines = log_content.split('\n')
+    total_lines = len(lines)
 
-    print(f"\n✓ Analysis complete:")
-    print(f"  Summary: {analysis['summary']}")
-    print(f"  Test failures: {len(error_patterns['test_failures'])}")
-    print(f"  Timeout errors: {len(error_patterns['timeout_errors'])}")
-    print(f"  Resource errors: {len(error_patterns['resource_errors'])}")
-    print(f"  Build errors: {len(error_patterns['build_errors'])}")
-    print(f"  Other errors: {len(error_patterns['other_errors'])}")
+    print(f"\n✓ Log preview (last {num_lines} lines of {total_lines} total):")
+    print("  " + "-" * 76)
 
-    if error_patterns['test_failures']:
-        print(f"\n  First test failure:")
-        print(f"    {error_patterns['test_failures'][0]}")
+    preview_lines = lines[-num_lines:] if len(lines) > num_lines else lines
+    for line in preview_lines:
+        # Truncate very long lines
+        display_line = line[:100] + "..." if len(line) > 100 else line
+        print(f"  {display_line}")
+
+    print("  " + "-" * 76)
 
 
 def handle_test_error(error: Exception) -> None:
@@ -100,32 +98,31 @@ def fetch_and_display_log(repo_info, pr_number: str, job_name: str,
     return log_content
 
 
-def test_analyze_failed_job(repo_identifier: Optional[str], pr_number: str,
-                           limit_lines: int = DEFAULT_LOG_LINES) -> bool:
-    """Test analyzing failed jobs for a PR."""
+def test_fetch_failed_job_log(repo_identifier: Optional[str], pr_number: str) -> bool:
+    """Test fetching build logs for failed jobs."""
     try:
         repo_info = resolve_repository(repo_identifier)
-        print_test_header("Analyze failed jobs", repo_info.full_name, pr_number)
+        print_test_header("Fetch failed job logs", repo_info.full_name, pr_number)
 
         failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
 
         if not failed_jobs:
-            print(f"✓ No failed jobs to analyze for {repo_info.full_name} PR #{pr_number}")
+            print(f"✓ No failed jobs found for {repo_info.full_name} PR #{pr_number}")
             return True
 
-        # Analyze the first failed job
+        # Fetch log for the first failed job
         job_name, build = list(failed_jobs.items())[0]
 
         print(f"Repository: {build.repository}")
-        print(f"Analyzing job: {job_name}")
+        print(f"Fetching log for job: {job_name}")
         print(f"Build ID: {build.build_id}\n")
 
         log_content = fetch_and_display_log(repo_info, pr_number, job_name, build.build_id)
         if not log_content:
             return False
 
-        analysis = analyze_build_log(log_content, max_lines=limit_lines)
-        print_analysis_summary(analysis)
+        # Show a preview of the log (LLM client will do actual analysis)
+        print_log_preview(log_content, num_lines=20)
 
         return True
 
@@ -173,7 +170,7 @@ def run_tests(repo_identifier: Optional[str], pr_number: str) -> List[Tuple[str,
     """Run all tests and return results."""
     return [
         ("List Failed Jobs", test_list_failed_jobs(repo_identifier, pr_number)),
-        ("Analyze Failed Jobs", test_analyze_failed_job(repo_identifier, pr_number)),
+        ("Fetch Failed Job Logs", test_fetch_failed_job_log(repo_identifier, pr_number)),
     ]
 
 
@@ -220,4 +217,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

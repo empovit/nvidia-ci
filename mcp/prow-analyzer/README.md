@@ -1,6 +1,6 @@
 # Prow CI Analyzer - MCP Server
 
-[MCP](https://modelcontextprotocol.io/) server for analyzing failed Prow CI jobs in GitHub repositories.
+[MCP](https://modelcontextprotocol.io/) server for accessing Prow CI job data from GitHub repositories using OpenShift CI infrastructure.
 
 ## Setup
 
@@ -39,6 +39,7 @@ pip install -r requirements.txt
 
 ```yaml
 gcs_bucket: "test-platform-results"
+gcsweb_base_url: "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs"
 path_template: "pr-logs/pull/{org}_{repo}/{pr_number}"
 repositories:
   - org: rh-ecosystem-edge
@@ -55,6 +56,7 @@ repositories:
       "args": ["/path/to/mcp_server.py"],
       "env": {
         "PROW_GCS_BUCKET": "test-platform-results",
+        "PROW_GCSWEB_BASE_URL": "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs",
         "PROW_PATH_TEMPLATE": "pr-logs/pull/{org}_{repo}/{pr_number}",
         "PROW_REPOSITORIES": "rh-ecosystem-edge/nvidia-ci,openshift/release"
       }
@@ -64,8 +66,9 @@ repositories:
 ```
 
 **Environment Variables:**
-- `PROW_GCS_BUCKET` - GCS bucket name
-- `PROW_PATH_TEMPLATE` - Path template
+- `PROW_GCS_BUCKET` - GCS bucket name (for data access)
+- `PROW_GCSWEB_BASE_URL` - Base URL for GCSWeb UI links (without trailing slash)
+- `PROW_PATH_TEMPLATE` - Path template for job data
 - `PROW_REPOSITORIES` - Comma-separated `org/repo` list
 - `PROW_NO_CONFIG_FILE` - Set to "1" to ignore config.yaml
 
@@ -83,6 +86,7 @@ Add to `~/.config/Cursor/mcp.json` or `~/.cursor/mcp.json`:
       "args": ["/absolute/path/to/mcp_server.py"],
       "env": {
         "PROW_GCS_BUCKET": "test-platform-results",
+        "PROW_GCSWEB_BASE_URL": "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs",
         "PROW_PATH_TEMPLATE": "pr-logs/pull/{org}_{repo}/{pr_number}",
         "PROW_REPOSITORIES": "rh-ecosystem-edge/nvidia-ci,openshift/release"
       }
@@ -110,22 +114,46 @@ Add to `~/.config/Claude/claude_desktop_config.json`:
 
 ## Tools
 
-### Overview
-- `get_pr_jobs_overview` - Get overview of all jobs in a PR (status, counts, success rate, job details grouped by status)
+This MCP server provides data access tools. The LLM client performs analysis of the retrieved data.
 
-### Job Details
-- `list_failed_jobs` - List failed jobs for a PR
-- `get_build_log` - Fetch main build log for a job
-- `list_build_steps` - List available steps/artifacts in a build
-- `get_step_build_log` - Fetch build log for a specific step
+### Overview & Status
+- `get_pr_jobs_overview` - Get comprehensive overview of all jobs in a PR including status, counts, success rate, and job details grouped by status
 
-### Analysis
-- `analyze_failed_job` - Extract error patterns from a failed job's log
-- `analyze_all_failed_jobs` - Extract error patterns from all failed jobs in a PR
+### Job Data Access
+- `list_failed_jobs` - List all failed jobs for a PR with build IDs and Prow URLs
+- `get_build_log` - Fetch complete build log for a specific job
+- `list_build_steps` - List available steps/artifacts in a build (useful for complex multi-step jobs)
+- `get_step_build_log` - Fetch build log for a specific step/artifact
 
-## Usage
+## Usage Examples
 
-1. Use `get_pr_jobs_overview` to see the overall state of a PR's jobs
-2. Use `list_build_steps` and `get_step_build_log` to drill down into specific failures
-3. Use `analyze_failed_job` or `analyze_all_failed_jobs` for automated error pattern extraction
+### Quick Status Check
+```
+User: "What's the status of PR 123?"
+LLM: Calls get_pr_jobs_overview → Shows 5 passed, 2 failed, 95% success rate
+```
+
+### Investigating Failures
+```
+User: "Why did PR 456 fail?"
+LLM: 1. Calls list_failed_jobs → Gets failed job names
+     2. Calls get_build_log → Retrieves full logs
+     3. Analyzes logs using its intelligence
+     4. Identifies root cause and explains it
+```
+
+### Deep Dive into Complex Jobs
+```
+User: "What step failed in the e2e-test job?"
+LLM: 1. Calls list_build_steps → Shows all test steps
+     2. Calls get_step_build_log for specific steps
+     3. Pinpoints exact failure location
+```
+
+## Architecture
+
+This server follows MCP best practices:
+- **Server role**: Fetch and provide CI data
+- **LLM role**: Analyze logs, identify issues, suggest solutions
+- **Clean separation**: Server has no opinions, LLM provides intelligence
 

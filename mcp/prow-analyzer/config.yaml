@@ -3,6 +3,10 @@
 # GCS bucket where Prow stores CI results
 gcs_bucket: "test-platform-results"
 
+# Base URL for GCSWeb UI (used to generate clickable links)
+# This is NOT used for data access - only for creating human-readable URLs
+gcsweb_base_url: "https://gcsweb-ci.apps.ci.l2s4.p1.openshiftapps.com/gcs"
+
 # Path template within the GCS bucket
 # Available variables: {org}, {repo}, {org_repo}, {pr_number}
 path_template: "pr-logs/pull/{org}_{repo}/{pr_number}"
