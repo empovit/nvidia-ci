@@ -8,13 +8,9 @@ This script tests the core functions without requiring a full MCP client.
 import sys
 import traceback
 from typing import Optional, Tuple, List
-from mcp_server import (
-    get_failed_jobs_for_pr,
-    get_build_log,
-    load_config,
-    build_repository_cache,
-    resolve_repository,
-)
+from config import load_config, build_repository_cache, resolve_repository
+from prow.jobs import get_failed_jobs_for_pr
+from prow.logs import get_build_log
 
 # Constants
 SEPARATOR = "=" * 80
@@ -61,13 +57,13 @@ def handle_test_error(error: Exception) -> None:
     traceback.print_exc()
 
 
-def test_list_failed_jobs(repo_identifier: Optional[str], pr_number: str) -> bool:
+def test_list_failed_jobs(config, repo_cache, repo_identifier: Optional[str], pr_number: str) -> bool:
     """Test listing failed jobs for a PR."""
     try:
-        repo_info = resolve_repository(repo_identifier)
+        repo_info = resolve_repository(repo_identifier, repo_cache)
         print_test_header("List failed jobs", repo_info.full_name, pr_number)
 
-        failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
+        failed_jobs = get_failed_jobs_for_pr(config, repo_info, pr_number)
 
         if not failed_jobs:
             print(f"✓ No failed jobs found for {repo_info.full_name} PR #{pr_number}")
@@ -84,10 +80,10 @@ def test_list_failed_jobs(repo_identifier: Optional[str], pr_number: str) -> boo
         return False
 
 
-def fetch_and_display_log(repo_info, pr_number: str, job_name: str,
+def fetch_and_display_log(config, repo_info, pr_number: str, job_name: str,
                           build_id: str) -> Optional[str]:
     """Fetch build log and display its size."""
-    log_content = get_build_log(repo_info, pr_number, job_name, build_id)
+    log_content = get_build_log(config, repo_info, pr_number, job_name, build_id)
 
     if not log_content:
         print(f"✗ Failed to fetch build log")
@@ -98,13 +94,13 @@ def fetch_and_display_log(repo_info, pr_number: str, job_name: str,
     return log_content
 
 
-def test_fetch_failed_job_log(repo_identifier: Optional[str], pr_number: str) -> bool:
+def test_fetch_failed_job_log(config, repo_cache, repo_identifier: Optional[str], pr_number: str) -> bool:
     """Test fetching build logs for failed jobs."""
     try:
-        repo_info = resolve_repository(repo_identifier)
+        repo_info = resolve_repository(repo_identifier, repo_cache)
         print_test_header("Fetch failed job logs", repo_info.full_name, pr_number)
 
-        failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
+        failed_jobs = get_failed_jobs_for_pr(config, repo_info, pr_number)
 
         if not failed_jobs:
             print(f"✓ No failed jobs found for {repo_info.full_name} PR #{pr_number}")
@@ -117,7 +113,7 @@ def test_fetch_failed_job_log(repo_identifier: Optional[str], pr_number: str) ->
         print(f"Fetching log for job: {job_name}")
         print(f"Build ID: {build.build_id}\n")
 
-        log_content = fetch_and_display_log(repo_info, pr_number, job_name, build.build_id)
+        log_content = fetch_and_display_log(config, repo_info, pr_number, job_name, build.build_id)
         if not log_content:
             return False
 
@@ -150,11 +146,11 @@ def parse_arguments() -> Tuple[str, Optional[str]]:
     return pr_number, repo_identifier
 
 
-def initialize_config() -> None:
+def initialize_config():
     """Load configuration and build repository cache."""
-    import mcp_server
-    mcp_server.CONFIG = load_config()
-    mcp_server.REPO_CACHE = build_repository_cache()
+    config = load_config()
+    repo_cache = build_repository_cache(config)
+    return config, repo_cache
 
 
 def print_main_header(repo_full_name: str, pr_number: str) -> None:
@@ -166,11 +162,11 @@ def print_main_header(repo_full_name: str, pr_number: str) -> None:
     print(f"{HEADER_SEPARATOR}")
 
 
-def run_tests(repo_identifier: Optional[str], pr_number: str) -> List[Tuple[str, bool]]:
+def run_tests(config, repo_cache, repo_identifier: Optional[str], pr_number: str) -> List[Tuple[str, bool]]:
     """Run all tests and return results."""
     return [
-        ("List Failed Jobs", test_list_failed_jobs(repo_identifier, pr_number)),
-        ("Fetch Failed Job Logs", test_fetch_failed_job_log(repo_identifier, pr_number)),
+        ("List Failed Jobs", test_list_failed_jobs(config, repo_cache, repo_identifier, pr_number)),
+        ("Fetch Failed Job Logs", test_fetch_failed_job_log(config, repo_cache, repo_identifier, pr_number)),
     ]
 
 
@@ -198,13 +194,13 @@ def print_test_summary(results: List[Tuple[str, bool]]) -> bool:
 def main() -> None:
     """Run the test suite."""
     pr_number, repo_identifier = parse_arguments()
-    initialize_config()
+    config, repo_cache = initialize_config()
 
     try:
-        repo_info = resolve_repository(repo_identifier)
+        repo_info = resolve_repository(repo_identifier, repo_cache)
         print_main_header(repo_info.full_name, pr_number)
 
-        results = run_tests(repo_identifier, pr_number)
+        results = run_tests(config, repo_cache, repo_identifier, pr_number)
         all_passed = print_test_summary(results)
 
         sys.exit(0 if all_passed else 1)
