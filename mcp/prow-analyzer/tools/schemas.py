@@ -134,30 +134,34 @@ def build_tool_list(repo_cache: Dict[str, Any]) -> list[Tool]:
     tools.extend([
         _build_tool_schema(
             "find_must_gather_directories",
-            "Find all extracted must-gather directories in a build. Note: Only finds extracted directories, archives (.tar, .tar.gz) are not analyzed.",
+            "Find all must-gather data in a build (both extracted directories and archives). Returns two types: (1) type='extracted' - can be analyzed directly via list_must_gather_files/get_must_gather_file, (2) type='archive' - requires local download for analysis with specialized tools. If root cause cannot be determined from available data, suggest user download archives from the provided download_url for deeper analysis with tools like 'omc' (OpenShift Must Gather CLI) or local LLM file analysis.",
             job_build_props,
             base_required + ["job_name", "build_id"]
         ),
         _build_tool_schema(
-            "list_must_gather_pod_logs",
-            "List all pod log files (.log) in a must-gather directory. Useful for finding which pod logs are available for analysis.",
-            {**job_build_props, "must_gather_path": {"type": "string", "description": "Path to must-gather directory (from find_must_gather_directories)"}},
+            "list_must_gather_files",
+            "List files in a must-gather directory. Returns all non-archive files by default (logs, YAML, HTML, JSON, etc.). Supports optional pattern filtering.",
+            {**job_build_props,
+             "must_gather_path": {"type": "string", "description": "Path to must-gather directory (from find_must_gather_directories)"},
+             "pattern": {"type": "string", "description": "Optional file pattern with wildcards (e.g., '*.log', '*.yaml', '*events*'). Default: '*' (all files)"},
+             "include_archives": {"type": "boolean", "description": "If true, include archive files (.tar, .gz, etc.) in results. Default: false"}},
             base_required + ["job_name", "build_id", "must_gather_path"]
         ),
         _build_tool_schema(
-            "get_must_gather_pod_log",
-            "Fetch a specific pod log from a must-gather directory. Returns the full log content.",
+            "get_must_gather_file",
+            "Fetch any file from a must-gather directory (logs, YAML, HTML, JSON, event files, etc.). Use list_must_gather_files or search_must_gather_files to find available files first.",
             {**job_build_props,
              "must_gather_path": {"type": "string", "description": "Path to must-gather directory"},
-             "log_path": {"type": "string", "description": "Path to log file within must-gather (from list_must_gather_pod_logs)"}},
-            base_required + ["job_name", "build_id", "must_gather_path", "log_path"]
+             "file_path": {"type": "string", "description": "Path to file within must-gather"}},
+            base_required + ["job_name", "build_id", "must_gather_path", "file_path"]
         ),
         _build_tool_schema(
             "search_must_gather_files",
-            "Search for files matching a pattern in a must-gather directory. Supports wildcards (e.g., '*.yaml', '*events*', 'cluster_policy*').",
+            "Search for files matching a pattern in a must-gather directory. Supports wildcards (e.g., '*.yaml', '*events*', 'cluster_policy*'). Archives are excluded by default. Use get_must_gather_file to read found files.",
             {**job_build_props,
              "must_gather_path": {"type": "string", "description": "Path to must-gather directory"},
-             "pattern": {"type": "string", "description": "File pattern with wildcards (e.g., '*.yaml', '*events*')"}},
+             "pattern": {"type": "string", "description": "File pattern with wildcards (e.g., '*.yaml', '*events*', '*.html')"},
+             "include_archives": {"type": "boolean", "description": "If true, include archive files in results. Default: false"}},
             base_required + ["job_name", "build_id", "must_gather_path", "pattern"]
         ),
     ])

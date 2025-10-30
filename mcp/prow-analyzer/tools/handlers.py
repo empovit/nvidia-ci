@@ -188,31 +188,43 @@ def create_handlers(config: Dict[str, Any], repo_cache: Dict[str, Any]) -> Dict[
 
     def _handle_find_must_gather_directories(cfg, repo_info, arguments: dict) -> list[TextContent]:
         """Handle find_must_gather_directories tool call."""
-        must_gather_dirs = must_gather.find_must_gather_dirs(
+        must_gather_items = must_gather.find_must_gather_dirs(
             cfg, repo_info,
             arguments["pr_number"],
             arguments["job_name"],
             arguments["build_id"]
         )
 
+        # Separate extracted directories from archives
+        extracted = [item for item in must_gather_items if item.get("type") == "extracted"]
+        archives = [item for item in must_gather_items if item.get("type") == "archive"]
+
         result = _create_base_result(
             repo_info, arguments["pr_number"],
             job_name=arguments["job_name"],
             build_id=arguments["build_id"],
-            must_gather_directories=must_gather_dirs,
-            total_directories=len(must_gather_dirs),
-            note="Only extracted must-gather directories are listed. Archives (.tar, .tar.gz) are not analyzed.",
+            extracted_directories=extracted,
+            archives=archives,
+            total_extracted=len(extracted),
+            total_archives=len(archives),
+            summary=f"Found {len(extracted)} extracted director{'y' if len(extracted) == 1 else 'ies'} and {len(archives)} archive{'s' if len(archives) != 1 else ''}",
+            note="Extracted directories can be analyzed via list_must_gather_files/get_must_gather_file. "
+                 "Archives require local download for analysis with tools like 'omc' (https://github.com/gmeghnag/omc) or local LLM analysis.",
         )
         return _handle_success(result)
 
-    def _handle_list_must_gather_pod_logs(cfg, repo_info, arguments: dict) -> list[TextContent]:
-        """Handle list_must_gather_pod_logs tool call."""
-        pod_logs = must_gather.list_must_gather_pod_logs(
+    def _handle_list_must_gather_files(cfg, repo_info, arguments: dict) -> list[TextContent]:
+        """Handle list_must_gather_files tool call."""
+        include_archives = arguments.get("include_archives", False)
+        pattern = arguments.get("pattern", "*")
+        files = must_gather.list_must_gather_files(
             cfg, repo_info,
             arguments["pr_number"],
             arguments["job_name"],
             arguments["build_id"],
-            arguments["must_gather_path"]
+            arguments["must_gather_path"],
+            include_archives=include_archives,
+            pattern=pattern
         )
 
         result = _create_base_result(
@@ -220,20 +232,22 @@ def create_handlers(config: Dict[str, Any], repo_cache: Dict[str, Any]) -> Dict[
             job_name=arguments["job_name"],
             build_id=arguments["build_id"],
             must_gather_path=arguments["must_gather_path"],
-            pod_logs=pod_logs,
-            total_logs=len(pod_logs),
+            pattern=pattern,
+            files=files,
+            total_files=len(files),
+            archives_included=include_archives,
         )
         return _handle_success(result)
 
-    def _handle_get_must_gather_pod_log(cfg, repo_info, arguments: dict) -> list[TextContent]:
-        """Handle get_must_gather_pod_log tool call."""
-        result = must_gather.get_must_gather_pod_log(
+    def _handle_get_must_gather_file(cfg, repo_info, arguments: dict) -> list[TextContent]:
+        """Handle get_must_gather_file tool call."""
+        result = must_gather.get_must_gather_file(
             cfg, repo_info,
             arguments["pr_number"],
             arguments["job_name"],
             arguments["build_id"],
             arguments["must_gather_path"],
-            arguments["log_path"]
+            arguments["file_path"]
         )
 
         if "error" in result:
@@ -243,13 +257,15 @@ def create_handlers(config: Dict[str, Any], repo_cache: Dict[str, Any]) -> Dict[
 
     def _handle_search_must_gather_files(cfg, repo_info, arguments: dict) -> list[TextContent]:
         """Handle search_must_gather_files tool call."""
+        include_archives = arguments.get("include_archives", False)
         matching_files = must_gather.search_must_gather_files(
             cfg, repo_info,
             arguments["pr_number"],
             arguments["job_name"],
             arguments["build_id"],
             arguments["must_gather_path"],
-            arguments["pattern"]
+            arguments["pattern"],
+            include_archives=include_archives
         )
 
         result = _create_base_result(
@@ -260,6 +276,7 @@ def create_handlers(config: Dict[str, Any], repo_cache: Dict[str, Any]) -> Dict[
             pattern=arguments["pattern"],
             matching_files=matching_files,
             total_matches=len(matching_files),
+            archives_included=include_archives,
         )
         return _handle_success(result)
 
@@ -315,8 +332,8 @@ def create_handlers(config: Dict[str, Any], repo_cache: Dict[str, Any]) -> Dict[
 
         # Must-gather tools
         "find_must_gather_directories": wrapped(config, repo_cache, _handle_find_must_gather_directories),
-        "list_must_gather_pod_logs": wrapped(config, repo_cache, _handle_list_must_gather_pod_logs),
-        "get_must_gather_pod_log": wrapped(config, repo_cache, _handle_get_must_gather_pod_log),
+        "list_must_gather_files": wrapped(config, repo_cache, _handle_list_must_gather_files),
+        "get_must_gather_file": wrapped(config, repo_cache, _handle_get_must_gather_file),
         "search_must_gather_files": wrapped(config, repo_cache, _handle_search_must_gather_files),
 
         # Low-level tools

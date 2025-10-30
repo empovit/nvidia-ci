@@ -11,6 +11,7 @@ from typing import Optional, Tuple, List
 from config import load_config, build_repository_cache, resolve_repository
 from prow.jobs import get_failed_jobs_for_pr
 from prow.logs import get_build_log
+from must_gather.tools import _is_archive, ARCHIVE_EXTENSIONS
 
 # Constants
 SEPARATOR = "=" * 80
@@ -127,6 +128,56 @@ def test_fetch_failed_job_log(config, repo_cache, repo_identifier: Optional[str]
         return False
 
 
+def test_archive_filtering() -> bool:
+    """Test that archive filtering works correctly."""
+    try:
+        print_test_header("Archive filtering", "N/A", "N/A")
+
+        # Test cases: (filename, should_be_archive)
+        test_cases = [
+            ("event-filter.html", False),
+            ("pod.log", False),
+            ("config.yaml", False),
+            ("events.json", False),
+            ("must-gather.tar", True),
+            ("must-gather.tar.gz", True),
+            ("data.tgz", True),
+            ("backup.zip", True),
+            ("archive.bz2", True),
+            ("file.tar.bz2", True),
+            ("data.xz", True),
+            ("file.tar.xz", True),
+            ("FILE.TAR.GZ", True),  # Test case insensitivity
+        ]
+
+        print(f"Testing {len(test_cases)} filenames against {len(ARCHIVE_EXTENSIONS)} archive extensions...")
+        print(f"Archive extensions: {', '.join(ARCHIVE_EXTENSIONS)}\n")
+
+        all_passed = True
+        for filename, expected_is_archive in test_cases:
+            result = _is_archive(filename)
+            status = "✓" if result == expected_is_archive else "✗"
+            expected_str = "archive" if expected_is_archive else "non-archive"
+            result_str = "archive" if result else "non-archive"
+
+            print(f"  {status} {filename:25s} expected: {expected_str:12s} got: {result_str:12s}")
+
+            if result != expected_is_archive:
+                all_passed = False
+
+        print()
+        if all_passed:
+            print("✓ All archive filtering tests passed!")
+        else:
+            print("✗ Some archive filtering tests failed")
+
+        return all_passed
+
+    except Exception as e:
+        handle_test_error(e)
+        return False
+
+
 def parse_arguments() -> Tuple[str, Optional[str]]:
     """Parse command line arguments and return PR number and repository identifier."""
     if len(sys.argv) < 2:
@@ -165,6 +216,7 @@ def print_main_header(repo_full_name: str, pr_number: str) -> None:
 def run_tests(config, repo_cache, repo_identifier: Optional[str], pr_number: str) -> List[Tuple[str, bool]]:
     """Run all tests and return results."""
     return [
+        ("Archive Filtering", test_archive_filtering()),
         ("List Failed Jobs", test_list_failed_jobs(config, repo_cache, repo_identifier, pr_number)),
         ("Fetch Failed Job Logs", test_fetch_failed_job_log(config, repo_cache, repo_identifier, pr_number)),
     ]
