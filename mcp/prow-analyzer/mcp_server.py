@@ -11,11 +11,13 @@ Simplified approach:
 
 import json
 import urllib.parse
+import xml.etree.ElementTree as ET
 import yaml
 from collections import defaultdict
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import requests
 from mcp.server import Server
@@ -243,6 +245,22 @@ def build_pr_path(repo_info: RepositoryInfo, pr_number: str) -> str:
         org_repo=repo_info.gcs_name,
         pr_number=pr_number
     )
+
+
+def build_artifacts_path(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, *sub_paths: str) -> str:
+    """
+    Build a GCS path to artifacts directory with optional sub-paths.
+
+    Example:
+        build_artifacts_path(repo, "123", "job", "456") -> "path/to/artifacts/"
+        build_artifacts_path(repo, "123", "job", "456", "step", "file.txt") -> "path/to/artifacts/step/file.txt"
+    """
+    pr_path = build_pr_path(repo_info, pr_number)
+    base = f"{pr_path}/{job_name}/{build_id}/artifacts"
+
+    if sub_paths:
+        return f"{base}/{'/'.join(sub_paths)}"
+    return f"{base}/"
 
 
 def list_gcs_directories(prefix: str) -> List[str]:
@@ -486,6 +504,434 @@ def get_pr_jobs_overview(repo_info: RepositoryInfo, pr_number: str) -> Dict[str,
     }
 
 
+# ============================================================================
+# LOW-LEVEL TOOLS: Direct GCS access for maximum flexibility
+# ============================================================================
+
+def list_gcs_files_and_dirs(path: str) -> Dict[str, Any]:
+    """
+    List both files and directories at a GCS path.
+
+    Returns dict with 'files' and 'directories' lists.
+    Files include name, size, and modified time.
+    """
+    bucket = get_gcs_bucket()
+    url = f"https://storage.googleapis.com/storage/v1/b/{bucket}/o"
+
+    # Normalize path - ensure it ends with / for directory listing
+    if path and not path.endswith('/'):
+        path = path + '/'
+
+    params = {
+        "prefix": path,
+        "delimiter": "/",
+        "alt": "json",
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+
+        # Extract directories (prefixes)
+        prefixes = data.get("prefixes", [])
+        directories = []
+        for p in prefixes:
+            # Remove the common prefix and trailing slash to get just the directory name
+            dir_name = p.rstrip('/').replace(path, '', 1)
+            if dir_name:  # Skip empty
+                directories.append(dir_name)
+
+        # Extract files (items)
+        items = data.get("items", [])
+        files = []
+        for item in items:
+            file_name = item["name"].replace(path, '', 1)
+            if file_name and file_name != path.rstrip('/'):  # Skip the directory itself
+                files.append({
+                    "name": file_name,
+                    "size": int(item.get("size", 0)),
+                    "updated": item.get("updated", ""),
+                })
+
+        return {
+            "path": path.rstrip('/'),
+            "directories": directories,
+            "files": files,
+            "total_directories": len(directories),
+            "total_files": len(files),
+        }
+    except Exception as e:
+        return {
+            "path": path.rstrip('/'),
+            "error": str(e),
+            "directories": [],
+            "files": [],
+            "total_directories": 0,
+            "total_files": 0,
+        }
+
+
+def fetch_gcs_file_with_info(path: str) -> Dict[str, Any]:
+    """
+    Fetch a file from GCS with metadata.
+
+    Returns dict with content, size, and metadata.
+    """
+    content = fetch_gcs_file(path)
+
+    if content is None:
+        return {
+            "path": path,
+            "error": "File not found or could not be read",
+            "content": None,
+        }
+
+    return {
+        "path": path,
+        "content": content,
+        "size_bytes": len(content),
+        "size_lines": len(content.split('\n')),
+    }
+
+
+# ============================================================================
+# HIGH-LEVEL STRUCTURED DATA TOOLS: Parse specific file formats
+# ============================================================================
+
+def get_step_metadata(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, step_name: str) -> Dict[str, Any]:
+    """
+    Get metadata from finished.json, started.json for a specific step.
+
+    Returns parsed JSON data with timing and status information.
+    """
+    step_base = build_artifacts_path(repo_info, pr_number, job_name, build_id, step_name).rstrip('/')
+
+    result = {
+        "repository": repo_info.full_name,
+        "pr_number": pr_number,
+        "job_name": job_name,
+        "build_id": build_id,
+        "step_name": step_name,
+    }
+
+    # Try to fetch finished.json
+    finished_path = f"{step_base}/finished.json"
+    finished_content = fetch_gcs_file(finished_path)
+    if finished_content:
+        try:
+            result["finished"] = json.loads(finished_content)
+        except json.JSONDecodeError:
+            result["finished"] = {"error": "Invalid JSON"}
+
+    # Try to fetch started.json
+    started_path = f"{step_base}/started.json"
+    started_content = fetch_gcs_file(started_path)
+    if started_content:
+        try:
+            result["started"] = json.loads(started_content)
+        except json.JSONDecodeError:
+            result["started"] = {"error": "Invalid JSON"}
+
+    # Calculate duration if both timestamps present
+    if "finished" in result and "started" in result:
+        finished_ts = result["finished"].get("timestamp")
+        started_ts = result["started"].get("timestamp")
+        if finished_ts and started_ts:
+            result["duration_seconds"] = finished_ts - started_ts
+
+    return result
+
+
+def _is_junit_file(file_info: Dict[str, Any]) -> bool:
+    """Check if a file is a JUnit XML file."""
+    name = file_info["name"]
+    return name.startswith("junit") and name.endswith(".xml")
+
+
+def find_junit_files_in_build(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str) -> List[Dict[str, Any]]:
+    """
+    Find all JUnit XML files in a build's artifacts.
+
+    Returns list of dicts with file paths and sizes.
+    """
+    artifacts_prefix = build_artifacts_path(repo_info, pr_number, job_name, build_id)
+
+    # List top-level directories
+    top_dirs = list_gcs_directories(artifacts_prefix)
+
+    junit_files = []
+
+    def add_junit_files_from_dir(dir_path: str, step_prefix: str):
+        """Helper to add JUnit files from a directory."""
+        files_data = list_gcs_files_and_dirs(dir_path)
+        for file_info in files_data.get("files", []):
+            if _is_junit_file(file_info):
+                junit_files.append({
+                    "path": f"{step_prefix}{file_info['name']}",
+                    "full_path": f"{dir_path.rstrip('/')}/{file_info['name']}",
+                    "size": file_info["size"],
+                    "step": step_prefix.split('/')[0],  # Top-level step name
+                })
+
+    # Search in each top-level directory and one level down
+    for top_dir in top_dirs:
+        dir_path = f"{artifacts_prefix}{top_dir}/"
+
+        # Check top level for junit files
+        add_junit_files_from_dir(dir_path, f"{top_dir}/")
+
+        # Check one level down (in artifacts/ subdirectory)
+        files_data = list_gcs_files_and_dirs(dir_path)
+        if "artifacts" in files_data.get("directories", []):
+            subdir_path = f"{dir_path}artifacts/"
+            add_junit_files_from_dir(subdir_path, f"{top_dir}/artifacts/")
+
+    return junit_files
+
+
+def parse_junit_xml(xml_content: str) -> Dict[str, Any]:
+    """
+    Parse JUnit XML and extract test results.
+
+    Returns dict with test counts, failures, and error details.
+    """
+    try:
+        root = ET.fromstring(xml_content)
+
+        # Get test suite info
+        tests = int(root.get("tests", 0))
+        failures = int(root.get("failures", 0))
+        errors = int(root.get("errors", 0))
+        skipped = int(root.get("skipped", 0))
+        time = float(root.get("time", 0.0))
+
+        # Extract failed test cases
+        failed_tests = []
+        for testcase in root.findall(".//testcase"):
+            failure = testcase.find("failure")
+            error = testcase.find("error")
+
+            if failure is not None or error is not None:
+                test_info = {
+                    "name": testcase.get("name", ""),
+                    "classname": testcase.get("classname", ""),
+                    "time": float(testcase.get("time", 0.0)),
+                }
+
+                if failure is not None:
+                    test_info["type"] = "failure"
+                    test_info["message"] = failure.get("message", "")
+                    test_info["details"] = failure.text or ""
+                elif error is not None:
+                    test_info["type"] = "error"
+                    test_info["message"] = error.get("message", "")
+                    test_info["details"] = error.text or ""
+
+                failed_tests.append(test_info)
+
+        return {
+            "summary": {
+                "total_tests": tests,
+                "failures": failures,
+                "errors": errors,
+                "skipped": skipped,
+                "passed": tests - failures - errors - skipped,
+                "duration_seconds": time,
+            },
+            "failed_tests": failed_tests,
+            "success": failures == 0 and errors == 0,
+        }
+    except ET.ParseError as e:
+        return {
+            "error": f"Failed to parse JUnit XML: {str(e)}",
+            "summary": {},
+            "failed_tests": [],
+        }
+
+
+def get_junit_results(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, junit_path: str) -> Dict[str, Any]:
+    """
+    Fetch and parse a JUnit XML file.
+
+    Returns parsed test results with failure details.
+    """
+    full_path = build_artifacts_path(repo_info, pr_number, job_name, build_id, junit_path).rstrip('/')
+
+    xml_content = fetch_gcs_file(full_path)
+    if not xml_content:
+        return {
+            "repository": repo_info.full_name,
+            "pr_number": pr_number,
+            "job_name": job_name,
+            "build_id": build_id,
+            "junit_path": junit_path,
+            "error": "JUnit file not found",
+        }
+
+    parsed = parse_junit_xml(xml_content)
+
+    return {
+        "repository": repo_info.full_name,
+        "pr_number": pr_number,
+        "job_name": job_name,
+        "build_id": build_id,
+        "junit_path": junit_path,
+        **parsed,
+    }
+
+
+# ============================================================================
+# MUST-GATHER TOOLS: Specialized tools for OpenShift must-gather artifacts
+# ============================================================================
+
+def _search_directory_recursive(base_path: str, filter_fn: Callable[[Dict[str, Any]], bool], max_depth: int = 5) -> List[Dict[str, Any]]:
+    """
+    Recursively search a directory structure and collect files matching a filter.
+
+    Args:
+        base_path: GCS base path to start search
+        filter_fn: Function that takes file_info dict and returns True if file should be included
+        max_depth: Maximum recursion depth
+
+    Returns:
+        List of matching files with path, name, size, and full_path
+    """
+    results = []
+
+    def search_directory(dir_path: str, relative_path: str = ""):
+        """Inner recursive function."""
+        data = list_gcs_files_and_dirs(dir_path + "/")
+
+        # Check files in current directory
+        for file_info in data.get("files", []):
+            if filter_fn(file_info):
+                results.append({
+                    "name": file_info["name"],
+                    "path": f"{relative_path}/{file_info['name']}" if relative_path else file_info["name"],
+                    "full_path": f"{dir_path}/{file_info['name']}",
+                    "size": file_info["size"],
+                })
+
+        # Recursively search subdirectories (with depth limit)
+        if relative_path.count('/') < max_depth:
+            for subdir in data.get("directories", []):
+                new_relative = f"{relative_path}/{subdir}" if relative_path else subdir
+                search_directory(f"{dir_path}/{subdir}", new_relative)
+
+    search_directory(base_path)
+    return results
+
+
+def find_must_gather_dirs(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str) -> List[Dict[str, Any]]:
+    """
+    Find all extracted must-gather directories (skip archives).
+
+    Returns list of must-gather directories with their paths.
+    Only returns directories containing 'must-gather' in the name, excluding archives.
+    """
+    artifacts_prefix = build_artifacts_path(repo_info, pr_number, job_name, build_id)
+
+    # List top-level directories
+    top_dirs = list_gcs_directories(artifacts_prefix)
+
+    must_gather_dirs = []
+
+    # Search for must-gather directories at multiple levels
+    for top_dir in top_dirs:
+        dir_path = f"{artifacts_prefix}{top_dir}"
+
+        # Check if this directory itself is a must-gather
+        if "must-gather" in top_dir.lower():
+            must_gather_dirs.append({
+                "path": top_dir,
+                "full_path": dir_path,
+                "level": "step",
+            })
+
+        # Check one level deeper for must-gather directories
+        subdirs_data = list_gcs_files_and_dirs(dir_path + "/")
+        for subdir in subdirs_data.get("directories", []):
+            if "must-gather" in subdir.lower():
+                # Check if it's an extracted directory (has subdirectories, not just .tar files)
+                subdir_full_path = f"{dir_path}/{subdir}"
+                subdir_contents = list_gcs_files_and_dirs(subdir_full_path + "/")
+
+                # Only include if it has directories (meaning it's extracted)
+                if subdir_contents.get("directories"):
+                    must_gather_dirs.append({
+                        "path": f"{top_dir}/{subdir}",
+                        "full_path": subdir_full_path,
+                        "level": "nested",
+                    })
+
+    return must_gather_dirs
+
+
+def list_must_gather_pod_logs(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, must_gather_path: str) -> List[Dict[str, Any]]:
+    """
+    List all pod log files in a must-gather directory.
+
+    Returns list of pod log files with their paths and sizes.
+    """
+    mg_base_path = build_artifacts_path(repo_info, pr_number, job_name, build_id, must_gather_path)
+
+    # Search for all .log files
+    return _search_directory_recursive(
+        mg_base_path.rstrip('/'),
+        filter_fn=lambda f: f["name"].endswith(".log")
+    )
+
+
+def get_must_gather_pod_log(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, must_gather_path: str, log_path: str) -> Dict[str, Any]:
+    """
+    Fetch a specific pod log from a must-gather directory.
+
+    Returns the log content with metadata.
+    """
+    full_path = build_artifacts_path(repo_info, pr_number, job_name, build_id, must_gather_path, log_path).rstrip('/')
+
+    log_content = fetch_gcs_file(full_path)
+    if not log_content:
+        return {
+            "repository": repo_info.full_name,
+            "pr_number": pr_number,
+            "job_name": job_name,
+            "build_id": build_id,
+            "must_gather_path": must_gather_path,
+            "log_path": log_path,
+            "error": "Log file not found",
+        }
+
+    return {
+        "repository": repo_info.full_name,
+        "pr_number": pr_number,
+        "job_name": job_name,
+        "build_id": build_id,
+        "must_gather_path": must_gather_path,
+        "log_path": log_path,
+        "content": log_content,
+        "size_bytes": len(log_content),
+        "size_lines": len(log_content.split('\n')),
+    }
+
+
+def search_must_gather_files(repo_info: RepositoryInfo, pr_number: str, job_name: str, build_id: str, must_gather_path: str, pattern: str) -> List[Dict[str, Any]]:
+    """
+    Search for files matching a pattern in a must-gather directory.
+
+    Pattern supports wildcards: *.yaml, *events*, etc.
+    Returns list of matching files with their paths and sizes.
+    """
+    mg_base_path = build_artifacts_path(repo_info, pr_number, job_name, build_id, must_gather_path)
+
+    # Search for files matching pattern (case-insensitive)
+    return _search_directory_recursive(
+        mg_base_path.rstrip('/'),
+        filter_fn=lambda f: fnmatch(f["name"].lower(), pattern.lower())
+    )
+
+
 # Create MCP server
 app = Server("prow-analyzer")
 
@@ -540,7 +986,9 @@ async def list_tools() -> list[Tool]:
     repo_desc, repos_str, base_required, _ = _get_repository_info()
     base_props = _build_base_properties(repo_desc)
 
-    # Simple tools with only base properties
+    # ========== HIGH-LEVEL TOOLS: Convenient, focused workflows ==========
+
+    # Overview & Status tools
     tools = [
         _build_tool_schema(
             "get_pr_jobs_overview",
@@ -556,7 +1004,7 @@ async def list_tools() -> list[Tool]:
         ),
     ]
 
-    # Tools with job_name and build_id
+    # Build-level tools
     job_build_props = {**base_props,
         "job_name": {"type": "string", "description": "Job name"},
         "build_id": {"type": "string", "description": "Build ID"},
@@ -577,16 +1025,95 @@ async def list_tools() -> list[Tool]:
         ),
     ])
 
-    # Tool with step_name
+    # Step-level tools
     step_props = {**job_build_props,
         "step_name": {"type": "string", "description": "Step/artifact name"},
     }
-    tools.append(_build_tool_schema(
-        "get_step_build_log",
-        "Fetch build log for a specific step/artifact within a job build. Use list_build_steps first to see available steps.",
-        step_props,
-        base_required + ["job_name", "build_id", "step_name"]
-    ))
+    tools.extend([
+        _build_tool_schema(
+            "get_step_build_log",
+            "Fetch build log for a specific step/artifact within a job build. Use list_build_steps first to see available steps.",
+            step_props,
+            base_required + ["job_name", "build_id", "step_name"]
+        ),
+        _build_tool_schema(
+            "get_step_metadata",
+            "Get parsed metadata (finished.json, started.json) for a specific step. Returns timing, status, and duration information.",
+            step_props,
+            base_required + ["job_name", "build_id", "step_name"]
+        ),
+    ])
+
+    # JUnit test result tools
+    tools.extend([
+        _build_tool_schema(
+            "find_junit_files",
+            "Find all JUnit XML test result files in a build. Returns paths to all junit*.xml files found in artifacts.",
+            job_build_props,
+            base_required + ["job_name", "build_id"]
+        ),
+        _build_tool_schema(
+            "get_junit_results",
+            "Parse a JUnit XML file and extract test results. Returns test counts, failures, and detailed error messages for failed tests.",
+            {**job_build_props, "junit_path": {"type": "string", "description": "Path to JUnit XML file (from find_junit_files)"}},
+            base_required + ["job_name", "build_id", "junit_path"]
+        ),
+    ])
+
+    # Must-gather tools (OpenShift debugging)
+    tools.extend([
+        _build_tool_schema(
+            "find_must_gather_directories",
+            "Find all extracted must-gather directories in a build. Note: Only finds extracted directories, archives (.tar, .tar.gz) are not analyzed.",
+            job_build_props,
+            base_required + ["job_name", "build_id"]
+        ),
+        _build_tool_schema(
+            "list_must_gather_pod_logs",
+            "List all pod log files (.log) in a must-gather directory. Useful for finding which pod logs are available for analysis.",
+            {**job_build_props, "must_gather_path": {"type": "string", "description": "Path to must-gather directory (from find_must_gather_directories)"}},
+            base_required + ["job_name", "build_id", "must_gather_path"]
+        ),
+        _build_tool_schema(
+            "get_must_gather_pod_log",
+            "Fetch a specific pod log from a must-gather directory. Returns the full log content.",
+            {**job_build_props,
+             "must_gather_path": {"type": "string", "description": "Path to must-gather directory"},
+             "log_path": {"type": "string", "description": "Path to log file within must-gather (from list_must_gather_pod_logs)"}},
+            base_required + ["job_name", "build_id", "must_gather_path", "log_path"]
+        ),
+        _build_tool_schema(
+            "search_must_gather_files",
+            "Search for files matching a pattern in a must-gather directory. Supports wildcards (e.g., '*.yaml', '*events*', 'cluster_policy*').",
+            {**job_build_props,
+             "must_gather_path": {"type": "string", "description": "Path to must-gather directory"},
+             "pattern": {"type": "string", "description": "File pattern with wildcards (e.g., '*.yaml', '*events*')"}},
+            base_required + ["job_name", "build_id", "must_gather_path", "pattern"]
+        ),
+    ])
+
+    # ========== LOW-LEVEL TOOLS: Maximum flexibility for exploration ==========
+
+    tools.extend([
+        _build_tool_schema(
+            "list_directory",
+            "List files and directories at any GCS path. Use this for exploration when high-level tools don't cover your needs. Returns directories and files with sizes.",
+            {"path": {"type": "string", "description": "GCS path to list (e.g., 'pr-logs/pull/org_repo/123/job/build/artifacts/')"}},
+            ["path"]
+        ),
+        _build_tool_schema(
+            "fetch_file",
+            "Fetch any file content from GCS by path. Use this when you need a specific file not covered by other tools. Returns file content with size metadata.",
+            {"path": {"type": "string", "description": "Full GCS path to file"}},
+            ["path"]
+        ),
+        _build_tool_schema(
+            "get_pr_base_path",
+            f"Get the base GCS path for a PR. Useful for constructing custom paths for list_directory or fetch_file. Configured repositories: {repos_str}",
+            base_props,
+            base_required
+        ),
+    ])
 
     return tools
 
@@ -616,20 +1143,10 @@ def _create_base_result(repo_info: RepositoryInfo, pr_number: str, **kwargs) -> 
     }
 
 
-def _create_no_failed_jobs_result(repo_info: RepositoryInfo, pr_number: str) -> Dict[str, Any]:
-    """Create standard response for when no failed jobs are found."""
-    return _create_base_result(
-        repo_info, pr_number,
-        message=f"No failed jobs found for {repo_info.full_name} PR #{pr_number}",
-        failed_jobs_count=0,
-    )
-
-
-def _add_log_metadata(result: Dict[str, Any], log_content: str) -> Dict[str, Any]:
-    """Add log size metadata to result dictionary."""
+def _add_log_metadata(result: Dict[str, Any], log_content: str) -> None:
+    """Add log size metadata to result dictionary (modifies in place)."""
     result["log_size_bytes"] = len(log_content)
     result["log_size_lines"] = len(log_content.split('\n'))
-    return result
 
 
 def _with_repo_resolution(handler_func):
@@ -657,7 +1174,11 @@ def _handle_list_failed_jobs(repo_info: RepositoryInfo, arguments: dict) -> list
     failed_jobs = get_failed_jobs_for_pr(repo_info, pr_number)
 
     if not failed_jobs:
-        result = _create_no_failed_jobs_result(repo_info, pr_number)
+        result = _create_base_result(
+            repo_info, pr_number,
+            message=f"No failed jobs found for {repo_info.full_name} PR #{pr_number}",
+            failed_jobs_count=0,
+        )
     else:
         result = _create_base_result(
             repo_info, pr_number,
@@ -737,13 +1258,199 @@ def _handle_get_step_build_log(repo_info: RepositoryInfo, arguments: dict) -> li
     return _handle_success(result)
 
 
+@_with_repo_resolution
+def _handle_get_step_metadata(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle get_step_metadata tool call."""
+    metadata = get_step_metadata(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"],
+        arguments["step_name"]
+    )
+    return _handle_success(metadata)
+
+
+@_with_repo_resolution
+def _handle_find_junit_files(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle find_junit_files tool call."""
+    junit_files = find_junit_files_in_build(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"]
+    )
+
+    result = _create_base_result(
+        repo_info, arguments["pr_number"],
+        job_name=arguments["job_name"],
+        build_id=arguments["build_id"],
+        junit_files=junit_files,
+        total_files=len(junit_files),
+    )
+    return _handle_success(result)
+
+
+@_with_repo_resolution
+def _handle_get_junit_results(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle get_junit_results tool call."""
+    results = get_junit_results(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"],
+        arguments["junit_path"]
+    )
+    return _handle_success(results)
+
+
+@_with_repo_resolution
+def _handle_find_must_gather_directories(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle find_must_gather_directories tool call."""
+    must_gather_dirs = find_must_gather_dirs(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"]
+    )
+
+    result = _create_base_result(
+        repo_info, arguments["pr_number"],
+        job_name=arguments["job_name"],
+        build_id=arguments["build_id"],
+        must_gather_directories=must_gather_dirs,
+        total_directories=len(must_gather_dirs),
+        note="Only extracted must-gather directories are listed. Archives (.tar, .tar.gz) are not analyzed.",
+    )
+    return _handle_success(result)
+
+
+@_with_repo_resolution
+def _handle_list_must_gather_pod_logs(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle list_must_gather_pod_logs tool call."""
+    pod_logs = list_must_gather_pod_logs(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"],
+        arguments["must_gather_path"]
+    )
+
+    result = _create_base_result(
+        repo_info, arguments["pr_number"],
+        job_name=arguments["job_name"],
+        build_id=arguments["build_id"],
+        must_gather_path=arguments["must_gather_path"],
+        pod_logs=pod_logs,
+        total_logs=len(pod_logs),
+    )
+    return _handle_success(result)
+
+
+@_with_repo_resolution
+def _handle_get_must_gather_pod_log(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle get_must_gather_pod_log tool call."""
+    result = get_must_gather_pod_log(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"],
+        arguments["must_gather_path"],
+        arguments["log_path"]
+    )
+
+    if "error" in result:
+        return _handle_error(ValueError(result["error"]))
+
+    return _handle_success(result)
+
+
+@_with_repo_resolution
+def _handle_search_must_gather_files(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle search_must_gather_files tool call."""
+    matching_files = search_must_gather_files(
+        repo_info,
+        arguments["pr_number"],
+        arguments["job_name"],
+        arguments["build_id"],
+        arguments["must_gather_path"],
+        arguments["pattern"]
+    )
+
+    result = _create_base_result(
+        repo_info, arguments["pr_number"],
+        job_name=arguments["job_name"],
+        build_id=arguments["build_id"],
+        must_gather_path=arguments["must_gather_path"],
+        pattern=arguments["pattern"],
+        matching_files=matching_files,
+        total_matches=len(matching_files),
+    )
+    return _handle_success(result)
+
+
+def _handle_list_directory(arguments: dict) -> list[TextContent]:
+    """Handle list_directory tool call."""
+    try:
+        result = list_gcs_files_and_dirs(arguments["path"])
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
+
+
+def _handle_fetch_file(arguments: dict) -> list[TextContent]:
+    """Handle fetch_file tool call."""
+    try:
+        result = fetch_gcs_file_with_info(arguments["path"])
+        if "error" in result:
+            return _handle_error(ValueError(result["error"]))
+        return _handle_success(result)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@_with_repo_resolution
+def _handle_get_pr_base_path(repo_info: RepositoryInfo, arguments: dict) -> list[TextContent]:
+    """Handle get_pr_base_path tool call."""
+    pr_path = build_pr_path(repo_info, arguments["pr_number"])
+    bucket = get_gcs_bucket()
+    gcsweb_url = f"{get_gcsweb_base_url()}/{bucket}/{pr_path}"
+
+    result = {
+        "repository": repo_info.full_name,
+        "pr_number": arguments["pr_number"],
+        "gcs_path": pr_path,
+        "gcs_bucket": bucket,
+        "full_gcs_path": f"gs://{bucket}/{pr_path}",
+        "gcsweb_url": gcsweb_url,
+    }
+    return _handle_success(result)
+
+
 # Tool handler registry
 TOOL_HANDLERS = {
+    # High-level tools
     "get_pr_jobs_overview": _handle_get_pr_jobs_overview,
     "list_failed_jobs": _handle_list_failed_jobs,
     "get_build_log": _handle_get_build_log,
     "list_build_steps": _handle_list_build_steps,
     "get_step_build_log": _handle_get_step_build_log,
+    "get_step_metadata": _handle_get_step_metadata,
+
+    # JUnit tools
+    "find_junit_files": _handle_find_junit_files,
+    "get_junit_results": _handle_get_junit_results,
+
+    # Must-gather tools
+    "find_must_gather_directories": _handle_find_must_gather_directories,
+    "list_must_gather_pod_logs": _handle_list_must_gather_pod_logs,
+    "get_must_gather_pod_log": _handle_get_must_gather_pod_log,
+    "search_must_gather_files": _handle_search_must_gather_files,
+
+    # Low-level tools
+    "list_directory": _handle_list_directory,
+    "fetch_file": _handle_fetch_file,
+    "get_pr_base_path": _handle_get_pr_base_path,
 }
 
 
