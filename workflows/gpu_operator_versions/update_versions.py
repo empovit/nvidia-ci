@@ -5,6 +5,7 @@ from workflows.gpu_operator_versions.settings import Settings
 from workflows.gpu_operator_versions.openshift import fetch_ocp_versions
 from workflows.gpu_operator_versions.version_utils import get_latest_versions, get_earliest_versions
 from workflows.gpu_operator_versions.nvidia_gpu_operator import get_operator_versions, get_sha
+from workflows.gpu_operator_versions.catalog_checker import check_gpu_operator_availability
 
 # Constants
 test_command_template = "/test {ocp_version}-stable-nvidia-gpu-operator-e2e-{gpu_version}"
@@ -173,7 +174,8 @@ def create_tests_commands(diffs: dict, ocp_releases: list, gpu_releases: list,
     return tests_commands
 
 
-def calculate_diffs(old_versions: dict, new_versions: dict) -> dict:
+def calculate_diffs(old_versions: dict, new_versions: dict, ocp_versions: dict = None,
+                    support_matrix: dict = None, check_catalog: bool = False) -> dict:
     diffs = {}
     for key, value in new_versions.items():
         if isinstance(value, dict):
@@ -186,11 +188,83 @@ def calculate_diffs(old_versions: dict, new_versions: dict) -> dict:
                 logger.info(f'Key "{key}" has changed: {old_versions.get(key)} > {value}')
                 diffs[key] = value
 
+    # Filter GPU operator diffs by catalog availability
+    if check_catalog and VERSION_GPU_OPERATOR in diffs and ocp_versions and support_matrix:
+        gpu_diffs = diffs[VERSION_GPU_OPERATOR]
+        if gpu_diffs:
+            filtered = filter_new_gpu_versions_by_catalog(
+                gpu_diffs,
+                new_versions[VERSION_GPU_OPERATOR],
+                ocp_versions,
+                support_matrix
+            )
+            if filtered:
+                diffs[VERSION_GPU_OPERATOR] = filtered
+            else:
+                del diffs[VERSION_GPU_OPERATOR]
+
     return diffs
 
 
 def version2suffix(v: str):
     return v if v == VERSION_MASTER else f'{v.replace(".", "-")}-x'
+
+
+def filter_new_gpu_versions_by_catalog(
+    gpu_diffs: dict,
+    all_gpu_versions: dict,
+    ocp_versions: dict,
+    support_matrix: dict
+) -> dict:
+    """Filter out new GPU versions that aren't in any active OCP catalog."""
+    if not gpu_diffs:
+        return gpu_diffs
+
+    new_gpu_versions = list(gpu_diffs.keys())
+    ocp_releases = list(ocp_versions.keys())
+    gpu_releases = get_latest_versions(list(all_gpu_versions.keys()), 2)
+    active_ocp_versions = get_active_ocp_versions(ocp_releases, support_matrix)
+
+    # Only check latest 2 GPU releases
+    versions_to_check = [v for v in new_gpu_versions if v in gpu_releases]
+    if not versions_to_check:
+        return gpu_diffs
+
+    # Check catalog availability
+    logger.info(f'Checking catalog availability for {len(versions_to_check)} new GPU version(s)')
+    all_catalog_results = check_gpu_operator_availability(
+        gpu_versions=versions_to_check,
+        ocp_versions=active_ocp_versions,
+        operator_package="gpu-operator-certified"
+    )
+
+    # Filter out versions not in any catalog
+    filtered_diffs = dict(gpu_diffs)
+    for gpu_version in versions_to_check:
+        catalog_results = all_catalog_results.get(gpu_version, {})
+        available_in_any = any(catalog_results.values())
+
+        if not available_in_any:
+            logger.warning(
+                f'GPU operator {gpu_version} not available in any active OCP catalog - '
+                f'excluding from versions.json (will retry next run)'
+            )
+            del filtered_diffs[gpu_version]
+
+    return filtered_diffs
+
+
+def apply_diffs(old_versions: dict, diffs: dict) -> dict:
+    """Apply diffs to old versions to create updated versions."""
+    updated = dict(old_versions)
+    for key, value in diffs.items():
+        if isinstance(value, dict) and key in updated and isinstance(updated[key], dict):
+            # Recursively apply nested diffs
+            updated[key] = apply_diffs(updated[key], value)
+        else:
+            updated[key] = value
+    return updated
+
 
 def main():
     settings = Settings()
@@ -206,8 +280,21 @@ def main():
 
     with open(settings.version_file_path, "r+") as json_f:
         old_versions = json.load(json_f)
+
+        # Calculate diffs with catalog filtering
+        diffs = calculate_diffs(
+            old_versions,
+            new_versions,
+            ocp_versions=ocp_versions,
+            support_matrix=settings.support_matrix,
+            check_catalog=settings.check_catalog_availability
+        )
+
+        # Apply filtered diffs to get final versions
+        final_versions = apply_diffs(old_versions, diffs)
+
         json_f.seek(0)
-        json.dump(new_versions, json_f, indent=4)
+        json.dump(final_versions, json_f, indent=4)
         json_f.truncate()
 
     diffs = calculate_diffs(old_versions, new_versions)
