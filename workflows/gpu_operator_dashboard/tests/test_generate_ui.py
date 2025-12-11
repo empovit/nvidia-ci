@@ -430,7 +430,7 @@ class TestGenerateTestMatrix(TestCase):
         """Test that generate_test_matrix works with the new separated bundle_tests and release_tests structure."""
         # Mock templates
         mock_load_template.side_effect = [
-            '<html><head><title>Test Matrix</title></head><body>',  # header.html
+            '<html><head><title>Test Matrix</title></head><body>{global_notes}',  # header.html
             '<div id="ocp-{ocp_key}"><h2>{ocp_key}</h2>{notes}{table_rows}{bundle_info}</div>',  # main_table.html
             '<div class="footer">Last updated: {LAST_UPDATED}</div></body></html>'  # footer.html
         ]
@@ -528,7 +528,7 @@ class TestGenerateTestMatrix(TestCase):
         """Test generate_test_matrix with empty bundle_tests and release_tests sections."""
         # Mock templates
         mock_load_template.side_effect = [
-            '<html><body>',  # header.html
+            '<html><body>{global_notes}',  # header.html
             '<div id="ocp-{ocp_key}">{table_rows}{bundle_info}</div>',  # main_table.html
             '</body></html>'  # footer.html
         ]
@@ -555,7 +555,7 @@ class TestGenerateTestMatrix(TestCase):
         """Test that generate_test_matrix properly filters out invalid semantic versions from release tests."""
         # Mock templates
         mock_load_template.side_effect = [
-            '<html><body>',  # header.html
+            '<html><body>{global_notes}',  # header.html
             '<div>{table_rows}</div>',  # main_table.html
             '</body></html>'  # footer.html
         ]
@@ -613,6 +613,44 @@ class TestGenerateTestMatrix(TestCase):
         self.assertNotIn('invalid-gpu-job', html_result)
         self.assertNotIn('aborted-job', html_result)
         self.assertNotIn('23.8.0', html_result)
+
+    @patch('workflows.gpu_operator_dashboard.generate_ci_dashboard.load_template')
+    def test_generate_test_matrix_with_global_notes(self, mock_load_template):
+        """Test that generate_test_matrix properly displays global notes."""
+        # Mock templates
+        mock_load_template.side_effect = [
+            '<html><body>{global_notes}',  # header.html
+            '<div id="ocp-{ocp_key}">{table_rows}</div>',  # main_table.html
+            '</body></html>'  # footer.html
+        ]
+
+        # Test data with global notes
+        ocp_data = {
+            'global_notes': ['Global note 1', 'Global note 2'],
+            '4.14': {
+                'notes': [],
+                'bundle_tests': [],
+                'release_tests': [
+                    {
+                        OCP_FULL_VERSION: '4.14.1',
+                        GPU_OPERATOR_VERSION: '23.9.0',
+                        'test_status': STATUS_SUCCESS,
+                        'prow_job_url': 'https://example.com/job1',
+                        'job_timestamp': '1712345678'
+                    }
+                ]
+            }
+        }
+
+        html_result = generate_test_matrix(ocp_data)
+
+        # Verify global notes appear
+        self.assertIn('Global note 1', html_result)
+        self.assertIn('Global note 2', html_result)
+        self.assertIn('section-label', html_result)  # Notes section styling
+
+        # Verify global_notes is filtered out from OCP keys
+        self.assertIn('4.14', html_result)  # OCP version should still appear
 
 
 if __name__ == '__main__':

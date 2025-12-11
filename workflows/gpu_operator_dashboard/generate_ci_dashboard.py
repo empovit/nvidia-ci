@@ -51,9 +51,18 @@ def generate_test_matrix(ocp_data: Dict[str, Dict[str, Any]]) -> str:
       3. Reading the footer template and injecting the last-updated time.
     """
     header_template = load_template("header.html")
+
+    # Extract global notes (stored at top level, not under an OCP version)
+    global_notes = ocp_data.get("global_notes", [])
+    global_notes_html = build_notes(global_notes)
+    header_template = header_template.replace("{global_notes}", global_notes_html)
+
     html_content = header_template
     main_table_template = load_template("main_table.html")
-    sorted_ocp_keys = sorted(ocp_data.keys(), reverse=True)
+
+    # Get OCP version keys, excluding global_notes
+    ocp_keys = [key for key in ocp_data.keys() if key != "global_notes"]
+    sorted_ocp_keys = sorted(ocp_keys, reverse=True)
     html_content += build_toc(sorted_ocp_keys)
 
     for ocp_key in sorted_ocp_keys:
