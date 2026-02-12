@@ -10,6 +10,7 @@ import (
 	"github.com/golang/glog"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/rh-ecosystem-edge/nvidia-ci/internal/dra"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/gpuparams"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/inittools"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/testworkloads"
@@ -77,7 +78,7 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-imex"), f
 		Expect(err).ToNot(HaveOccurred(), "Failed to verify DRA prerequisites")
 
 		By("Installing DRA Driver's Helm chart")
-		actionConfig, err = shared.NewActionConfig(inittools.APIClient, shared.DRADriverNamespace, gpuparams.GpuLogLevel)
+		actionConfig, err = dra.NewActionConfig(inittools.APIClient, dra.DRADriverNamespace, gpuparams.GpuLogLevel)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Helm action configuration")
 
 		DeferCleanup(func() error {
@@ -86,8 +87,11 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-imex"), f
 		})
 
 		// For compute domain tests, disable GPU resources
-		customValues := shared.NewDRAValues().WithGPUResources(false)
-		err = shared.InstallDRADriver(actionConfig, shared.LatestVersion, customValues)
+		config, err := dra.LoadConfig()
+		Expect(err).ToNot(HaveOccurred(), "Failed to load DRA configuration")
+		config.WithGPUResources(false)
+
+		err = shared.InstallDRADriver(actionConfig, config)
 		Expect(err).ToNot(HaveOccurred(), "Failed to install DRA driver")
 
 		By("Verifying compute domain DeviceClass resources")
@@ -185,7 +189,7 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-imex"), f
 			glog.V(gpuparams.GpuLogLevel).Infof("VectorAdd pod is Running")
 
 			By("Verifying compute domain pods exist in DRA driver namespace")
-			pods, err := pod.List(inittools.APIClient, shared.DRADriverNamespace)
+			pods, err := pod.List(inittools.APIClient, dra.DRADriverNamespace)
 			Expect(err).ToNot(HaveOccurred(), "Failed to list pods in DRA driver namespace")
 
 			expectedPodNamePrefix := names.ComputeDomain()
@@ -202,7 +206,7 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-imex"), f
 			}
 			Expect(matchingPods).NotTo(BeEmpty(),
 				"Expected at least one pod with name starting with '%s' and label '%s' in namespace %s",
-				expectedPodNamePrefix, computeDomainLabel, shared.DRADriverNamespace)
+				expectedPodNamePrefix, computeDomainLabel, dra.DRADriverNamespace)
 			glog.V(gpuparams.GpuLogLevel).Infof("Verified %d compute domain pod(s) in DRA driver namespace", len(matchingPods))
 		})
 	})

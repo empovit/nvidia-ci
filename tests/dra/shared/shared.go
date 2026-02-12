@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/golang/glog"
+	"github.com/rh-ecosystem-edge/nvidia-ci/internal/dra"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/gpuparams"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/wait"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/clients"
@@ -23,65 +24,6 @@ const (
 	defaultTimeout             = 5 * time.Minute
 	defaultDevicePluginEnabled = true // On par with the GPU Operator default
 )
-
-// DRAValues creates Helm chart values for DRA driver installation.
-// Use the helper functions below to configure specific options.
-type DRAValues map[string]interface{}
-
-// NewDRAValues creates a new DRAValues map with default configuration.
-func NewDRAValues() DRAValues {
-	return make(DRAValues)
-}
-
-// ensureMap ensures a key in the parent map contains a map[string]interface{}.
-// If the key is nil, creates a new map. If the key exists but is not a map, panics.
-//
-// IMPORTANT: The panic on type mismatch is INTENTIONAL. This function validates internal
-// invariants in the DRAValues builder pattern. A type mismatch indicates a programming bug
-// (incorrect builder usage or logic error), not a runtime condition that should be handled
-// gracefully. Failing fast with glog.Fatalf makes debugging easier by catching bugs immediately
-// rather than propagating corrupt state. DO NOT change this to return an error.
-func ensureMap(parent map[string]interface{}, key string) map[string]interface{} {
-	if parent[key] == nil {
-		m := make(map[string]interface{})
-		parent[key] = m
-		return m
-	}
-	m, ok := parent[key].(map[string]interface{})
-	if !ok {
-		// This is a programming bug, not a runtime error - fail fast to aid debugging
-		glog.Fatalf("%s field is not a map[string]interface{}", key)
-	}
-	return m
-}
-
-// WithGPUResources sets the resources.gpus.enabled value.
-func (v DRAValues) WithGPUResources(enabled bool) DRAValues {
-	resources := ensureMap(v, "resources")
-	gpus := ensureMap(resources, "gpus")
-	gpus["enabled"] = enabled
-	return v
-}
-
-// WithGPUResourcesOverride sets the gpuResourcesEnabledOverride value.
-func (v DRAValues) WithGPUResourcesOverride(override bool) DRAValues {
-	v["gpuResourcesEnabledOverride"] = override
-	return v
-}
-
-// WithImageRegistry sets the image repository.
-func (v DRAValues) WithImageRegistry(registry string) DRAValues {
-	image := ensureMap(v, "image")
-	image["repository"] = registry
-	return v
-}
-
-// WithImageTag sets the image tag.
-func (v DRAValues) WithImageTag(tag string) DRAValues {
-	image := ensureMap(v, "image")
-	image["tag"] = tag
-	return v
-}
 
 // VerifyDRAPrerequisites checks that all prerequisites for DRA driver installation are met.
 func VerifyDRAPrerequisites(apiClient *clients.Settings) error {
@@ -101,23 +43,42 @@ func VerifyDRAPrerequisites(apiClient *clients.Settings) error {
 }
 
 // InstallDRADriver installs the DRA driver and verifies the installation.
-// customValues can be nil or a DRAValues object with custom Helm chart values.
-func InstallDRADriver(actionConfig *action.Configuration, version string, customValues DRAValues) error {
-	apiClient := GetAPIClient(actionConfig)
+// The installation method is determined by config.ChartSource.
+// config can be created with dra.LoadConfig() which loads from env vars and populates Values map.
+// Values can then be overridden programmatically using config.With* methods.
+func InstallDRADriver(actionConfig *action.Configuration, config *dra.DRAConfig) error {
+	apiClient := dra.GetAPIClient(actionConfig)
 	if apiClient == nil {
 		return fmt.Errorf("failed to retrieve APIClient from action configuration")
 	}
 
-	glog.V(gpuparams.GpuLogLevel).Infof("Starting DRA driver installation from Helm repository (version: %s)", version)
-	err := InstallDRADriverFromRepo(actionConfig, version, customValues)
-	if err != nil {
-		return fmt.Errorf("failed to install DRA driver from Helm repository: %w", err)
+	var installErr error
+	if config.IsOCI() {
+		glog.V(gpuparams.GpuLogLevel).Infof("Starting DRA driver installation from OCI registry (source: %s, version: %s)",
+			config.GetChartSource(), config.GetChartVersion())
+		installErr = InstallDRADriverFromOCI(actionConfig, config.GetOCIRef(), config.GetChartVersion(), config.Values)
+	} else if config.IsLocal() {
+		localPath := config.GetLocalPath()
+		glog.V(gpuparams.GpuLogLevel).Infof("Starting DRA driver installation from local path (path: %s, version: %s)",
+			localPath, config.GetChartVersion())
+		installErr = InstallDRADriverFromLocal(actionConfig, localPath, config.GetChartVersion(), config.Values)
+	} else if config.IsRepo() {
+		repoURL := config.GetRepoURL()
+		glog.V(gpuparams.GpuLogLevel).Infof("Starting DRA driver installation from Helm repository (repo: %s, version: %s)",
+			repoURL, config.GetChartVersion())
+		installErr = InstallDRADriverFromRepo(actionConfig, repoURL, config.GetChartVersion(), config.Values)
+	} else {
+		return fmt.Errorf("invalid DRA_CHART_SOURCE: %s (must be OCI ref 'oci://...', HTTP(S) URL 'http(s)://...', or filesystem path)", config.GetChartSource())
+	}
+
+	if installErr != nil {
+		return fmt.Errorf("failed to install DRA driver: %w", installErr)
 	}
 
 	glog.V(gpuparams.GpuLogLevel).Infof("DRA driver Helm installation completed successfully")
 
 	glog.V(gpuparams.GpuLogLevel).Infof("Waiting for DRA driver pods to become ready")
-	err = WaitForDRADriverReady(apiClient, 5*time.Minute)
+	err := WaitForDRADriverReady(apiClient, 5*time.Minute)
 	if err != nil {
 		return fmt.Errorf("failed to wait for DRA driver pods to become ready: %w", err)
 	}
@@ -139,14 +100,14 @@ func VerifyDRAAPIAvailable(apiClient *clients.Settings) error {
 	}
 
 	for _, group := range apiGroupList.Groups {
-		if group.Name == DRAAPIGroup {
+		if group.Name == dra.DRAAPIGroup {
 			glog.V(gpuparams.GpuLogLevel).Infof("DRA API group '%s' is available with versions: %v",
-				DRAAPIGroup, group.Versions)
+				dra.DRAAPIGroup, group.Versions)
 			return nil
 		}
 	}
 
-	return fmt.Errorf("DRA API group '%s' not found - DRA feature must be enabled in the cluster", DRAAPIGroup)
+	return fmt.Errorf("DRA API group '%s' not found - DRA feature must be enabled in the cluster", dra.DRAAPIGroup)
 }
 
 // IsDevicePluginEnabled checks the device plugin state in ClusterPolicy.
@@ -206,41 +167,57 @@ type installChartOptions struct {
 	customValues  map[string]interface{}
 }
 
-// InstallDRADriverFromRepo installs the DRA driver from the NVIDIA Helm repository.
-// version can be a specific version (e.g., "25.8.1") or LatestVersion to use the latest published release.
-// customValues can be nil or a DRAValues object with custom Helm chart values.
-func InstallDRADriverFromRepo(actionConfig *action.Configuration, version string, customValues DRAValues) error {
+// InstallDRADriverFromRepo installs the DRA driver from a Helm repository.
+// repoURL is the Helm repository URL (e.g., "https://helm.ngc.nvidia.com/nvidia").
+// version can be a specific version (e.g., "25.8.1") or dra.LatestVersion to use the latest published release.
+// customValues can be nil or a map with custom Helm chart values.
+func InstallDRADriverFromRepo(actionConfig *action.Configuration, repoURL, version string, customValues map[string]interface{}) error {
 	helmVersion := ""
-	if version != LatestVersion {
+	if version != dra.LatestVersion {
 		helmVersion = version
 	}
 
 	return installChart(installChartOptions{
 		actionConfig: actionConfig,
-		releaseName:  DRADriverReleaseName,
-		repoURL:      DRADriverHelmRepo,
-		chartRef:     DRADriverChartName,
+		releaseName:  dra.DRADriverReleaseName,
+		repoURL:      repoURL,
+		chartRef:     dra.DRADriverChartName,
 		version:      helmVersion,
 		customValues: customValues,
 	})
 }
 
-// InstallDRADriverFromLocal installs the DRA driver from a local Helm chart.
-// customValues can be nil or a DRAValues object with custom Helm chart values.
-func InstallDRADriverFromLocal(actionConfig *action.Configuration, chartPath, imageRegistry, imageTag string, customValues DRAValues) error {
+// InstallDRADriverFromOCI installs the DRA driver from an OCI registry.
+// ociRef is the OCI reference (e.g., "oci://ghcr.io/nvidia/k8s-dra-driver-gpu").
+// version specifies the chart version to install.
+// customValues can be nil or a map with custom Helm chart values.
+func InstallDRADriverFromOCI(actionConfig *action.Configuration, ociRef, version string, customValues map[string]interface{}) error {
 	return installChart(installChartOptions{
-		actionConfig:  actionConfig,
-		releaseName:   DRADriverReleaseName,
-		chartRef:      chartPath,
-		imageRegistry: imageRegistry,
-		imageTag:      imageTag,
-		customValues:  customValues,
+		actionConfig: actionConfig,
+		releaseName:  dra.DRADriverReleaseName,
+		chartRef:     ociRef,
+		version:      version,
+		customValues: customValues,
+	})
+}
+
+// InstallDRADriverFromLocal installs the DRA driver from a local Helm chart.
+// localPath is the filesystem path to the chart (can include "file://" prefix).
+// version specifies the chart version (used for metadata).
+// customValues can be nil or a map with custom Helm chart values.
+func InstallDRADriverFromLocal(actionConfig *action.Configuration, localPath, version string, customValues map[string]interface{}) error {
+	return installChart(installChartOptions{
+		actionConfig: actionConfig,
+		releaseName:  dra.DRADriverReleaseName,
+		chartRef:     localPath,
+		version:      version,
+		customValues: customValues,
 	})
 }
 
 func installChart(opts installChartOptions) error {
 	client := action.NewInstall(opts.actionConfig)
-	client.Namespace = DRADriverNamespace
+	client.Namespace = dra.DRADriverNamespace
 	client.CreateNamespace = true
 	client.ReleaseName = opts.releaseName
 	client.Version = opts.version
@@ -317,7 +294,7 @@ func UninstallDRADriver(actionConfig *action.Configuration) error {
 
 	releaseExists := false
 	for _, release := range releases {
-		if release.Name == DRADriverReleaseName {
+		if release.Name == dra.DRADriverReleaseName {
 			releaseExists = true
 			break
 		}
@@ -332,7 +309,7 @@ func UninstallDRADriver(actionConfig *action.Configuration) error {
 	client.Wait = true
 	client.Timeout = defaultTimeout
 
-	_, err = client.Run(DRADriverReleaseName)
+	_, err = client.Run(dra.DRADriverReleaseName)
 	if err != nil {
 		return fmt.Errorf("failed to uninstall DRA driver: %w", err)
 	}
@@ -344,7 +321,7 @@ func UninstallDRADriver(actionConfig *action.Configuration) error {
 func WaitForDRADriverReady(apiClient *clients.Settings, timeout time.Duration) error {
 
 	glog.V(gpuparams.GpuLogLevel).Infof("Waiting for all DaemonSets to be ready")
-	err := wait.DaemonSetReady(apiClient, DRADriverKubeletPluginDaemonSetName, DRADriverNamespace, 10*time.Second, timeout)
+	err := wait.DaemonSetReady(apiClient, dra.DRADriverKubeletPluginDaemonSetName, dra.DRADriverNamespace, 10*time.Second, timeout)
 	if err != nil {
 		return fmt.Errorf("DaemonSets not ready: %w", err)
 	}
@@ -362,8 +339,8 @@ func WaitForDRADriverReady(apiClient *clients.Settings, timeout time.Duration) e
 // verifyDRADriverPods lists pods with DRA component labels and verifies both types exist.
 func verifyDRADriverPods(apiClient *clients.Settings) error {
 	// List only pods with DRA component label
-	labelSelector := fmt.Sprintf("%s in (%s,%s)", DRAComponentLabelKey, DRAComponentController, DRAComponentKubeletPlugin)
-	podList, err := apiClient.Pods(DRADriverNamespace).List(context.TODO(), metav1.ListOptions{
+	labelSelector := fmt.Sprintf("%s in (%s,%s)", dra.DRAComponentLabelKey, dra.DRAComponentController, dra.DRAComponentKubeletPlugin)
+	podList, err := apiClient.Pods(dra.DRADriverNamespace).List(context.TODO(), metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {
@@ -374,10 +351,10 @@ func verifyDRADriverPods(apiClient *clients.Settings) error {
 	hasKubeletPlugin := false
 
 	for _, pod := range podList.Items {
-		switch pod.GetLabels()[DRAComponentLabelKey] {
-		case DRAComponentController:
+		switch pod.GetLabels()[dra.DRAComponentLabelKey] {
+		case dra.DRAComponentController:
 			hasController = true
-		case DRAComponentKubeletPlugin:
+		case dra.DRAComponentKubeletPlugin:
 			hasKubeletPlugin = true
 		}
 		if hasController && hasKubeletPlugin {
@@ -386,11 +363,11 @@ func verifyDRADriverPods(apiClient *clients.Settings) error {
 	}
 
 	if !hasController {
-		return fmt.Errorf("no controller pods found with label: %s=%s", DRAComponentLabelKey, DRAComponentController)
+		return fmt.Errorf("no controller pods found with label: %s=%s", dra.DRAComponentLabelKey, dra.DRAComponentController)
 	}
 
 	if !hasKubeletPlugin {
-		return fmt.Errorf("no kubelet-plugin pods found with label: %s=%s", DRAComponentLabelKey, DRAComponentKubeletPlugin)
+		return fmt.Errorf("no kubelet-plugin pods found with label: %s=%s", dra.DRAComponentLabelKey, dra.DRAComponentKubeletPlugin)
 	}
 	return nil
 }
@@ -412,23 +389,23 @@ func VerifyDeviceClasses(apiClient *clients.Settings, deviceClassNames []string)
 	// Find the DRA API group and its preferred version
 	var preferredVersion string
 	for _, group := range groups {
-		if group.Name == DRAAPIGroup {
+		if group.Name == dra.DRAAPIGroup {
 			preferredVersion = group.PreferredVersion.Version
 			break
 		}
 	}
 
 	if preferredVersion == "" {
-		return fmt.Errorf("DRA API group '%s' not found", DRAAPIGroup)
+		return fmt.Errorf("DRA API group '%s' not found", dra.DRAAPIGroup)
 	}
 
 	// Verify deviceclasses resource exists in the discovered resources
-	groupVersion := fmt.Sprintf("%s/%s", DRAAPIGroup, preferredVersion)
+	groupVersion := fmt.Sprintf("%s/%s", dra.DRAAPIGroup, preferredVersion)
 	resourceExists := false
 	for _, resourceList := range resources {
 		if resourceList.GroupVersion == groupVersion {
 			for _, resource := range resourceList.APIResources {
-				if resource.Name == DRADeviceClassesResource {
+				if resource.Name == dra.DRADeviceClassesResource {
 					resourceExists = true
 					break
 				}
@@ -438,19 +415,19 @@ func VerifyDeviceClasses(apiClient *clients.Settings, deviceClassNames []string)
 	}
 
 	if !resourceExists {
-		return fmt.Errorf("%s resource not found in %s", DRADeviceClassesResource, groupVersion)
+		return fmt.Errorf("%s resource not found in %s", dra.DRADeviceClassesResource, groupVersion)
 	}
 
 	gvr := schema.GroupVersionResource{
-		Group:    DRAAPIGroup,
+		Group:    dra.DRAAPIGroup,
 		Version:  preferredVersion,
-		Resource: DRADeviceClassesResource,
+		Resource: dra.DRADeviceClassesResource,
 	}
 
 	// List all DeviceClasses
 	deviceClassList, err := apiClient.Resource(gvr).List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("failed to get %s: %w", DRADeviceClassesResource, err)
+		return fmt.Errorf("failed to get %s: %w", dra.DRADeviceClassesResource, err)
 	}
 
 	// Build set of existing DeviceClass names for efficient lookup
@@ -462,7 +439,7 @@ func VerifyDeviceClasses(apiClient *clients.Settings, deviceClassNames []string)
 	// Verify all expected DeviceClasses exist
 	for _, expected := range deviceClassNames {
 		if !existingNames[expected] {
-			return fmt.Errorf("'%s' not found in cluster's %s", expected, DRADeviceClassesResource)
+			return fmt.Errorf("'%s' not found in cluster's %s", expected, dra.DRADeviceClassesResource)
 		}
 	}
 	return nil

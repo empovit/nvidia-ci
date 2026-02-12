@@ -1,4 +1,4 @@
-package shared
+package dra
 
 import (
 	"fmt"
@@ -13,6 +13,13 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+)
+
+const (
+	DRADriverChartName   = "nvidia-dra-driver-gpu"
+	DRADriverReleaseName = DRADriverChartName
+	DRADriverHelmRepo    = "https://helm.ngc.nvidia.com/nvidia"
+	LatestVersion        = "latest"
 )
 
 // simpleRESTClientGetter provides a minimal RESTClientGetter implementation
