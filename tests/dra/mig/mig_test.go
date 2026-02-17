@@ -1,7 +1,9 @@
-package gpuallocation
+package mig
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/golang/glog"
@@ -14,6 +16,7 @@ import (
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/testworkloads"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/wait"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/namespace"
+	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/nodes"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/nvidiagpu"
 	"github.com/rh-ecosystem-edge/nvidia-ci/tests/dra/shared"
 	"helm.sh/helm/v3/pkg/action"
@@ -23,7 +26,44 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-func createGPUResourceClaimTemplate(namespace, name string) error {
+const (
+	// MIGDeviceClassName is the DeviceClass for MIG instances
+	MIGDeviceClassName = "mig.nvidia.com"
+)
+
+var (
+	// supportedGPUPattern matches NVIDIA H-series and GB-series GPUs that support MIG
+	// Examples: NVIDIA-H100, NVIDIA-H100-PCIE-80GB, NVIDIA-H200-SXM-141GB,
+	//           NVIDIA-GB200, NVIDIA-GB200-NVL72, NVIDIA-GB300
+	supportedGPUPattern = regexp.MustCompile(`^NVIDIA-(H|GB)\d{3}($|-)`)
+)
+
+// hasSupportedGPU checks if the cluster has any nodes with supported GPU models for MIG.
+// It validates the nvidia.com/gpu.product node label against the supportedGPUPattern regex.
+func hasSupportedGPU() (bool, error) {
+	glog.V(gpuparams.GpuLogLevel).Infof("Checking for supported MIG GPU nodes")
+
+	nodeList, err := nodes.List(inittools.APIClient)
+	if err != nil {
+		return false, fmt.Errorf("failed to list nodes: %w", err)
+	}
+
+	for _, node := range nodeList {
+		if productLabel, ok := node.Object.Labels[nvidiagpu.GPUProductLabel]; ok {
+			glog.V(gpuparams.GpuLogLevel).Infof("Node %s has GPU product: %s", node.Object.Name, productLabel)
+
+			if supportedGPUPattern.MatchString(productLabel) {
+				glog.V(gpuparams.GpuLogLevel).Infof("Found supported MIG GPU on node %s: %s", node.Object.Name, productLabel)
+				return true, nil
+			}
+		}
+	}
+
+	glog.V(gpuparams.GpuLogLevel).Infof("No supported MIG GPU nodes found in the cluster")
+	return false, nil
+}
+
+func createMIGResourceClaimTemplate(namespace, name string) error {
 	rct := &resourcev1.ResourceClaimTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -34,9 +74,9 @@ func createGPUResourceClaimTemplate(namespace, name string) error {
 				Devices: resourcev1.DeviceClaim{
 					Requests: []resourcev1.DeviceRequest{
 						{
-							Name: "gpu",
+							Name: "mig",
 							Exactly: &resourcev1.ExactDeviceRequest{
-								DeviceClassName: "gpu.nvidia.com",
+								DeviceClassName: MIGDeviceClassName,
 							},
 						},
 					},
@@ -51,21 +91,27 @@ func createGPUResourceClaimTemplate(namespace, name string) error {
 	return err
 }
 
-var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-gpu"), func() {
+var _ = Describe("DRA MIG", Ordered, Label("dra", "dra-mig"), func() {
 	var actionConfig *action.Configuration
 	var driver *dra.Driver
 	var originalDevicePluginEnabled bool
 
 	BeforeAll(func() {
+
 		By("Verifying minimum Kubernetes version")
-		err := shared.VerifyMinimumK8sVersion(inittools.APIClient, "1.34.0")
+		err := shared.VerifyMinimumK8sVersion(inittools.APIClient, "1.35.0")
 		Expect(err).ToNot(HaveOccurred(), "Kubernetes version does not meet minimum requirements")
 
 		By("Verifying DRA prerequisites")
 		err = shared.VerifyDRAPrerequisites(inittools.APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to verify DRA prerequisites")
 
-		By("Disabling device plugin for GPU allocation tests")
+		By("Checking for supported MIG GPU nodes")
+		hasSupported, err := hasSupportedGPU()
+		Expect(err).ToNot(HaveOccurred(), "Failed to check for supported GPU nodes")
+		Expect(hasSupported).To(BeTrue(), "No supported NVIDIA GPU (H100, H200, GB200, GB300, etc.) found in the cluster. MIG tests require H-series or GB-series GPUs.")
+
+		By("Disabling device plugin for DRA MIG tests")
 		devicePluginEnabled, err := shared.SetDevicePluginEnabled(inittools.APIClient, false)
 		Expect(err).ToNot(HaveOccurred(), "Failed to disable device plugin")
 		originalDevicePluginEnabled = devicePluginEnabled
@@ -97,7 +143,7 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-gpu"), fu
 		actionConfig, err = helm.NewActionConfig(inittools.APIClient, dra.DriverNamespace, gpuparams.GpuLogLevel)
 		Expect(err).ToNot(HaveOccurred(), "Failed to create Helm action configuration")
 
-		// For GPU allocation tests, explicitly enable GPU resources
+		// For MIG tests, explicitly enable GPU resources
 		driver, err = dra.NewDriver()
 		Expect(err).ToNot(HaveOccurred(), "Failed to create DRA driver")
 		driver.WithGPUResources(true).WithGPUResourcesOverride(true)
@@ -111,9 +157,9 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-gpu"), fu
 		Expect(err).ToNot(HaveOccurred(), "Failed to install DRA driver")
 	})
 
-	Context("When DRA driver is installed", func() {
-		It("Should allocate a single GPU using ResourceClaimTemplate", func() {
-			names := shared.NewTestNames("gpu-test")
+	Context("When DRA driver is installed with MIG support", func() {
+		It("Should allocate a MIG instance using ResourceClaimTemplate", func() {
+			names := shared.NewTestNames("mig-test")
 
 			By("Creating test namespace")
 			testNs := namespace.NewBuilder(inittools.APIClient, names.Namespace())
@@ -125,12 +171,12 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-gpu"), fu
 			})
 			glog.V(gpuparams.GpuLogLevel).Infof("Created test namespace: %s", names.Namespace())
 
-			By("Creating ResourceClaimTemplate for single GPU")
-			err = createGPUResourceClaimTemplate(names.Namespace(), names.ClaimTemplate())
+			By("Creating ResourceClaimTemplate for MIG instance")
+			err = createMIGResourceClaimTemplate(names.Namespace(), names.ClaimTemplate())
 			Expect(err).ToNot(HaveOccurred(), "Failed to create ResourceClaimTemplate")
 			glog.V(gpuparams.GpuLogLevel).Infof("Created ResourceClaimTemplate: %s", names.ClaimTemplate())
 
-			By("Creating VectorAdd pod with resource claim")
+			By("Creating VectorAdd pod with MIG resource claim")
 			rctNamePtr := names.ClaimTemplate()
 			resourceClaims := []corev1.PodResourceClaim{
 				{

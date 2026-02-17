@@ -7,6 +7,7 @@ require (
 	github.com/NVIDIA/gpu-operator v1.8.3-0.20251203194844-846018752b8a
 	github.com/NVIDIA/k8s-dra-driver-gpu v0.0.0-20260128084442-bee1e66be194
 	github.com/NVIDIA/k8s-operator-libs v0.0.0-20251027171627-45ccd0c3dd32
+	github.com/blang/semver/v4 v4.0.0
 	github.com/evanphx/json-patch/v5 v5.9.11
 	github.com/golang/glog v1.2.5
 	github.com/kelseyhightower/envconfig v1.4.0
@@ -46,7 +47,6 @@ require (
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chai2010/gettext-go v1.0.3 // indirect
 	github.com/clipperhouse/stringish v0.1.1 // indirect

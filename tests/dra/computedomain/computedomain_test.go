@@ -80,8 +80,12 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-imex"), f
 	var hasClique bool
 
 	BeforeAll(func() {
+		By("Verifying minimum Kubernetes version")
+		err := shared.VerifyMinimumK8sVersion(inittools.APIClient, "1.34.0")
+		Expect(err).ToNot(HaveOccurred(), "Kubernetes version does not meet minimum requirements")
+
 		By("Verifying DRA prerequisites")
-		err := shared.VerifyDRAPrerequisites(inittools.APIClient)
+		err = shared.VerifyDRAPrerequisites(inittools.APIClient)
 		Expect(err).ToNot(HaveOccurred(), "Failed to verify DRA prerequisites")
 
 		By("Installing DRA Driver's Helm chart")

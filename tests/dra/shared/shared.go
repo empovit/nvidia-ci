@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/blang/semver/v4"
 	"github.com/golang/glog"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/dra"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/gpuparams"
@@ -59,6 +60,41 @@ func VerifyDRAAPIAvailable(apiClient *clients.Settings) error {
 	}
 
 	return fmt.Errorf("DRA API group '%s' not found - DRA feature must be enabled in the cluster", dra.APIGroup)
+}
+
+// VerifyMinimumK8sVersion checks that the cluster's Kubernetes version meets the minimum required version.
+// minVersion should be in the format "major.minor.patch" (e.g., "1.34.0" or "1.35.0").
+func VerifyMinimumK8sVersion(apiClient *clients.Settings, minVersion string) error {
+	discoveryClient, err := discovery.NewDiscoveryClientForConfig(apiClient.Config)
+	if err != nil {
+		return fmt.Errorf("failed to create discovery client: %w", err)
+	}
+
+	serverVersion, err := discoveryClient.ServerVersion()
+	if err != nil {
+		return fmt.Errorf("failed to get server version: %w", err)
+	}
+
+	// Build a semver-compatible version string from server version
+	// ServerVersion.GitVersion is in format "v1.34.0" or similar
+	currentVersionStr := serverVersion.GitVersion
+
+	currentVersion, err := semver.ParseTolerant(currentVersionStr)
+	if err != nil {
+		return fmt.Errorf("failed to parse server version %s: %w", currentVersionStr, err)
+	}
+
+	minimumVersion, err := semver.ParseTolerant(minVersion)
+	if err != nil {
+		return fmt.Errorf("failed to parse minimum version %s: %w", minVersion, err)
+	}
+
+	if currentVersion.LT(minimumVersion) {
+		return fmt.Errorf("version %s of Kubernetes API does not meet minimum required version %s", currentVersion.String(), minimumVersion.String())
+	}
+
+	glog.V(gpuparams.GpuLogLevel).Infof("Kubernetes version %s meets minimum required version %s", currentVersion.String(), minimumVersion.String())
+	return nil
 }
 
 // IsDevicePluginEnabled checks the device plugin state in ClusterPolicy.

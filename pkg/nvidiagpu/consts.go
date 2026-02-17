@@ -7,6 +7,7 @@ const (
 
 	NvidiaGPULabel                   = "feature.node.kubernetes.io/pci-10de.present"
 	GPUPresentLabel                  = "nvidia.com/gpu.present"
+	GPUProductLabel                  = "nvidia.com/gpu.product"
 	GPUCapacityKey                   = "nvidia.com/gpu"
 	DevicePluginLabel                = "app=nvidia-device-plugin-daemonset"
 	OperatorGroupName                = "gpu-og"
