@@ -181,20 +181,18 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-imex"), f
 				},
 			}
 
-			vectorAdd := testworkloads.NewVectorAdd(names.Pod()).
-				WithResources(resources).
-				WithResourceClaims(resourceClaims).
-				WithCommand([]string{"/bin/sh", "-c", "/cuda-samples/vectorAdd && sleep 30"})
+		workload, err := testworkloads.NewVectorAdd(names.Pod()).
+			WithResources(resources).
+			WithResourceClaims(resourceClaims).
+			WithCommand([]string{"/bin/sh", "-c", "/cuda-samples/vectorAdd && sleep 30"}).
+			Create(inittools.APIClient, names.Namespace())
+		Expect(err).ToNot(HaveOccurred(), "Failed to create VectorAdd pod")
+		glog.V(gpuparams.GpuLogLevel).Infof("Created VectorAdd pod: %s", names.Pod())
 
-			workloadBuilder := testworkloads.NewBuilder(inittools.APIClient, names.Namespace(), vectorAdd).
-				Create()
-			Expect(workloadBuilder.Error()).ToNot(HaveOccurred(), "Failed to create VectorAdd pod")
-			glog.V(gpuparams.GpuLogLevel).Infof("Created VectorAdd pod: %s", names.Pod())
-
-			By("Waiting for VectorAdd pod to become Running")
-			workloadBuilder.WaitUntilStatus(corev1.PodRunning, 1*time.Minute)
-			Expect(workloadBuilder.Error()).ToNot(HaveOccurred(), "Failed to wait for pod Running status")
-			glog.V(gpuparams.GpuLogLevel).Infof("VectorAdd pod is Running")
+		By("Waiting for VectorAdd pod to become Running")
+		err = workload.WaitUntilRunning(1 * time.Minute)
+		Expect(err).ToNot(HaveOccurred(), "Failed to wait for pod Running status")
+		glog.V(gpuparams.GpuLogLevel).Infof("VectorAdd pod is Running")
 
 			By("Verifying compute domain pods exist in DRA driver namespace")
 			labelSelector := fmt.Sprintf("%s=%s", computeDomainLabel, computeDomainUID)

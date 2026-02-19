@@ -143,19 +143,17 @@ var _ = Describe("DRA Driver Installation", Ordered, Label("dra", "dra-gpu"), fu
 				},
 			}
 
-			vectorAdd := testworkloads.NewVectorAdd(names.Pod()).
-				WithResources(resources).
-				WithResourceClaims(resourceClaims)
+		workload, err := testworkloads.NewVectorAdd(names.Pod()).
+			WithResources(resources).
+			WithResourceClaims(resourceClaims).
+			Create(inittools.APIClient, names.Namespace())
+		Expect(err).ToNot(HaveOccurred(), "Failed to create VectorAdd pod")
+		glog.V(gpuparams.GpuLogLevel).Infof("Created VectorAdd pod: %s", names.Pod())
 
-			workloadBuilder := testworkloads.NewBuilder(inittools.APIClient, names.Namespace(), vectorAdd).
-				Create()
-			Expect(workloadBuilder.Error()).ToNot(HaveOccurred(), "Failed to create VectorAdd pod")
-			glog.V(gpuparams.GpuLogLevel).Infof("Created VectorAdd pod: %s", names.Pod())
-
-			By("Waiting for VectorAdd pod to succeed")
-			workloadBuilder.WaitUntilSuccess(1 * time.Minute)
-			Expect(workloadBuilder.Error()).ToNot(HaveOccurred(), "VectorAdd pod did not succeed")
-			glog.V(gpuparams.GpuLogLevel).Infof("VectorAdd pod succeeded: %s", names.Pod())
+		By("Waiting for VectorAdd pod to succeed")
+		err = workload.WaitUntilSuccess(1 * time.Minute)
+		Expect(err).ToNot(HaveOccurred(), "VectorAdd pod did not succeed")
+		glog.V(gpuparams.GpuLogLevel).Infof("VectorAdd pod succeeded: %s", names.Pod())
 		})
 	})
 })

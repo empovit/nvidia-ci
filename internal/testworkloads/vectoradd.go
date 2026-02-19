@@ -6,22 +6,23 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/gpuparams"
+	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/clients"
+	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/pod"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 const (
-	// DefaultImage is the default container image for VectorAdd workload
+	// DefaultImage is the default container image for VectorAdd workload.
 	DefaultImage = "nvcr.io/nvidia/k8s/cuda-sample:vectoradd-cuda12.5.0-ubi8"
 
-	// ContainerName is the name of the VectorAdd container
+	// ContainerName is the name of the VectorAdd container.
 	ContainerName = "vectoradd-ctr"
 
-	// SuccessIndicator is the string that indicates successful completion in logs
+	// SuccessIndicator is the string that indicates successful completion in logs.
 	SuccessIndicator = "Test PASSED"
 )
 
-// VectorAddWorkload implements the Workload interface for CUDA vector addition sample.
+// VectorAddWorkload configures a CUDA vector addition sample workload.
 type VectorAddWorkload struct {
 	podName        string
 	image          string
@@ -35,25 +36,12 @@ type VectorAddWorkload struct {
 // NewVectorAdd creates a VectorAdd workload with sensible defaults.
 func NewVectorAdd(podName string) *VectorAddWorkload {
 	glog.V(100).Infof("Creating VectorAdd workload: %s", podName)
+
 	return &VectorAddWorkload{
-		podName: podName,
-		image:   DefaultImage,
-		resources: corev1.ResourceRequirements{
-			Limits: corev1.ResourceList{
-				"nvidia.com/gpu": resource.MustParse("1"),
-			},
-		},
-		nodeSelector: map[string]string{
-			"nvidia.com/gpu.present":         "true",
-			"node-role.kubernetes.io/worker": "",
-		},
-		tolerations: []corev1.Toleration{
-			{
-				Key:      "nvidia.com/gpu",
-				Effect:   corev1.TaintEffectNoSchedule,
-				Operator: corev1.TolerationOpExists,
-			},
-		},
+		podName:     podName,
+		image:       DefaultImage,
+		resources:   defaultGPUResources(),
+		tolerations: defaultGPUTolerations(),
 	}
 }
 
@@ -93,8 +81,17 @@ func (v *VectorAddWorkload) WithResourceClaims(claims []corev1.PodResourceClaim)
 	return v
 }
 
-// BuildPodSpec creates the pod specification for VectorAdd workload.
-func (v *VectorAddWorkload) BuildPodSpec() (*corev1.Pod, error) {
+// Create deploys the workload pod to the cluster and returns a Workload for lifecycle management.
+func (v *VectorAddWorkload) Create(apiClient *clients.Settings, namespace string) (*Workload, error) {
+	podSpec, err := v.buildPodSpec()
+	if err != nil {
+		return nil, err
+	}
+
+	return newWorkload(apiClient, namespace, podSpec, vectorAddSuccessCheck)
+}
+
+func (v *VectorAddWorkload) buildPodSpec() (*corev1.Pod, error) {
 	glog.V(gpuparams.GpuLogLevel).Infof("Building pod spec for VectorAdd workload: %s", v.podName)
 
 	if v.podName == "" {
@@ -111,7 +108,7 @@ func (v *VectorAddWorkload) BuildPodSpec() (*corev1.Pod, error) {
 		container.Command = v.command
 	}
 
-	pod := NewUnprivilegedPod(
+	p := NewUnprivilegedPod(
 		v.podName,
 		[]corev1.Container{container},
 		v.nodeSelector,
@@ -120,18 +117,14 @@ func (v *VectorAddWorkload) BuildPodSpec() (*corev1.Pod, error) {
 	)
 
 	if len(v.resourceClaims) > 0 {
-		pod.Spec.ResourceClaims = v.resourceClaims
+		p.Spec.ResourceClaims = v.resourceClaims
 	}
 
-	return pod, nil
+	return p, nil
 }
 
-// CheckSuccess performs comprehensive success validation for VectorAdd.
-// For VectorAdd, this validates that the logs contain the success indicator.
-func (v *VectorAddWorkload) CheckSuccess(builder *Builder) error {
-	glog.V(gpuparams.GpuLogLevel).Infof("Checking VectorAdd success criteria")
-
-	logs, err := builder.GetFullLogs(ContainerName)
+func vectorAddSuccessCheck(pb *pod.Builder) error {
+	logs, err := pb.GetFullLog(ContainerName)
 	if err != nil {
 		return fmt.Errorf("failed to get logs: %w", err)
 	}

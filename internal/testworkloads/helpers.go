@@ -1,10 +1,43 @@
 package testworkloads
 
 import (
+	"sort"
+
+	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/nvidiagpu"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
+
+func supportedArchitectures(images map[string]string) []string {
+	archs := make([]string, 0, len(images))
+	for arch := range images {
+		archs = append(archs, arch)
+	}
+
+	sort.Strings(archs)
+
+	return archs
+}
+
+func defaultGPUResources() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{
+			nvidiagpu.GPUResourceName: resource.MustParse("1"),
+		},
+	}
+}
+
+func defaultGPUTolerations() []corev1.Toleration {
+	return []corev1.Toleration{
+		{
+			Key:      nvidiagpu.GPUTolerationKey,
+			Effect:   corev1.TaintEffectNoSchedule,
+			Operator: corev1.TolerationOpExists,
+		},
+	}
+}
 
 // NewUnprivilegedPod creates a pod with security best practices.
 // Accepts a slice of containers to support both single and multi-container workloads.
