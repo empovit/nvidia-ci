@@ -44,6 +44,7 @@ import (
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/mig"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 var (
@@ -348,8 +349,11 @@ var _ = Describe("GPU", Ordered, Label(tsparams.LabelSuite), func() {
 
 			// Here we don't need this step is we already have a GPU worker node on cluster
 			if ScaleCluster {
-				glog.V(gpuparams.GpuLogLevel).Infof("Sleeping for %s to allow the newly created GPU worker node to be labeled by NFD", nvidiagpu.NodeLabelingDelay.String())
-				time.Sleep(nvidiagpu.NodeLabelingDelay)
+				glog.V(gpuparams.GpuLogLevel).Infof("Waiting up to %s for NFD to label the GPU worker node", nvidiagpu.NodeLabelingDelay.String())
+				err := wait.NodeLabelExists(inittools.APIClient, nvidiagpu.NvidiaGPULabel, "true",
+					labels.Set(inittools.GeneralConfig.WorkerLabelMap),
+					nvidiagpu.LabelCheckInterval, nvidiagpu.NodeLabelingDelay)
+				Expect(err).ToNot(HaveOccurred(), "timed out waiting for GPU label on worker node: %v", err)
 			}
 
 			By("Get Cluster Architecture from first GPU enabled worker node")
@@ -408,8 +412,10 @@ var _ = Describe("GPU", Ordered, Label(tsparams.LabelSuite), func() {
 						Expect(err).ToNot(HaveOccurred(), "error creating custom GPU catalogsource "+
 							"builder Object name %s:  %v", CustomCatalogSource, err)
 
-						By(fmt.Sprintf("Sleep for %s to allow the GPU custom catalogsource to be created", nvidiagpu.CatalogSourceCreationDelay))
-						time.Sleep(nvidiagpu.CatalogSourceCreationDelay)
+						By("Wait for custom GPU catalogsource to exist")
+						err = wait.WaitForObjectToExist(createdGPUCustomCatalogSourceBuilder.Exists,
+							nvidiagpu.CatalogSourceCreationCheckInterval, nvidiagpu.CatalogSourceCreationDelay)
+						Expect(err).ToNot(HaveOccurred(), "timed out waiting for custom GPU catalogsource to exist: %v", err)
 
 						glog.V(gpuparams.GpuLogLevel).Infof("Wait up to %s for custom GPU catalogsource to be ready", nvidiagpu.CatalogSourceReadyTimeout)
 
@@ -565,10 +571,6 @@ var _ = Describe("GPU", Ordered, Label(tsparams.LabelSuite), func() {
 				}()
 
 			}
-
-			By(fmt.Sprintf("Sleep for %s to allow the GPU Operator deployment to be created", nvidiagpu.OperatorDeploymentCreationDelay))
-			glog.V(gpuparams.GpuLogLevel).Infof("Sleep for %s to allow the GPU Operator deployment to be created", nvidiagpu.OperatorDeploymentCreationDelay)
-			time.Sleep(nvidiagpu.OperatorDeploymentCreationDelay)
 
 			By(fmt.Sprintf("Wait for up to %s for GPU Operator deployment to be created", nvidiagpu.DeploymentCreationTimeout))
 			gpuDeploymentCreated := wait.DeploymentCreated(
@@ -971,8 +973,10 @@ var _ = Describe("GPU", Ordered, Label(tsparams.LabelSuite), func() {
 			glog.V(100).Infof("Successfully updated Subscription Channel to upgrade to '%s'",
 				updatedPulledSubBuilder.Definition.Spec.Channel)
 
-			glog.V(100).Infof("Sleeping for %s to allow new CSV to be deployed", nvidiagpu.CsvDeploymentSleepInterval)
-			time.Sleep(nvidiagpu.CsvDeploymentSleepInterval)
+			newCSV, err := wait.CSVDeployedInNamespace(inittools.APIClient, CurrentCSV,
+				nvidiagpu.NvidiaGPUNamespace, nvidiagpu.CsvDeploymentCheckInterval, nvidiagpu.CsvDeploymentTimeout)
+			Expect(err).ToNot(HaveOccurred(), "timed out waiting for new CSV after channel upgrade: %v", err)
+			glog.V(100).Infof("New CSV deployed after channel upgrade: %s", newCSV)
 
 			glog.V(100).Infof("After Subscription Channel upgrade, the StartingCSV is now '%s'",
 				updatedPulledSubBuilder.Object.Spec.StartingCSV)

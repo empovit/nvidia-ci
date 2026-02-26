@@ -8,11 +8,11 @@ import (
 	"github.com/golang/glog"
 	"github.com/rh-ecosystem-edge/nvidia-ci/internal/gpuparams"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/clients"
-	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/deployment"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/nodes"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/nvidiagpu"
 	"github.com/rh-ecosystem-edge/nvidia-ci/pkg/olm"
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -110,32 +110,46 @@ func CSVSucceeded(apiClient *clients.Settings, csvName, csvNamespace string, pol
 		})
 }
 
+// CSVDeployedInNamespace polls until a CSV different from previousCSVName appears in the namespace,
+// returning the new CSV name. Use after a subscription channel upgrade to wait for the new CSV.
+func CSVDeployedInNamespace(apiClient *clients.Settings, previousCSVName, namespace string,
+	pollInterval, timeout time.Duration) (string, error) {
+	var newCSVName string
+	err := wait.PollUntilContextTimeout(
+		context.TODO(), pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+			csvList, err := olm.ListClusterServiceVersion(apiClient, namespace)
+			if err != nil {
+				return false, err
+			}
+			for _, csv := range csvList {
+				if csv.Definition.Name != previousCSVName {
+					newCSVName = csv.Definition.Name
+					return true, nil
+				}
+			}
+			return false, nil
+		})
+	return newCSVName, err
+}
+
 // DeploymentCreated waits for a defined period of time for deployment to be created.
 func DeploymentCreated(apiClient *clients.Settings, deploymentName, deploymentNamespace string, pollInterval,
 	timeout time.Duration) bool {
-	// Note: the value for boolean variable "immediate" is false here, meaning check AFTER polling interval
-	//       on the very first try.  Otherwise the first check was causing an error and failing testcase.
 	err := wait.PollUntilContextTimeout(
-		context.TODO(), pollInterval, timeout, false, func(ctx context.Context) (bool, error) {
-			var err error
-			deploymentPulled, err := deployment.Pull(apiClient, deploymentName, deploymentNamespace)
-
+		context.TODO(), pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+			_, err := apiClient.AppsV1Interface.Deployments(deploymentNamespace).Get(
+				ctx, deploymentName, metav1.GetOptions{})
+			if k8serrors.IsNotFound(err) {
+				return false, nil
+			}
 			if err != nil {
-				glog.V(gpuparams.GpuLogLevel).Infof("Deployment '%s' pull from cluster namespace '%s' error:"+
-					" %v", deploymentName, deploymentNamespace, err)
-
 				return false, err
 			}
 
-			if deploymentPulled.Exists() {
-				glog.V(gpuparams.GpuLogLevel).Infof("Deployment '%s' in namespace '%s' has been created",
-					deploymentPulled.Object.Name, deploymentNamespace)
+			glog.V(gpuparams.GpuLogLevel).Infof("Deployment '%s' in namespace '%s' has been created",
+				deploymentName, deploymentNamespace)
 
-				// this exists out of the wait.PollImmediate().
-				return true, nil
-			}
-
-			return false, nil
+			return true, nil
 		})
 
 	return err == nil
@@ -207,6 +221,14 @@ func WaitForNodes(apiClient *clients.Settings, nodeSelector labels.Set, conditio
 			glog.V(gpuparams.GpuLogLevel).Info("All nodes satisfy the required condition")
 			return true, nil
 		})
+}
+
+// WaitForObjectToExist polls until checkFn returns true, indicating the object exists.
+// Use this before calling status-check methods that do not tolerate object absence.
+func WaitForObjectToExist(checkFn func() bool, pollInterval, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(
+		context.TODO(), pollInterval, timeout, true,
+		func(ctx context.Context) (bool, error) { return checkFn(), nil })
 }
 
 // DaemonSetReady waits for a specific DaemonSet to have all pods ready.

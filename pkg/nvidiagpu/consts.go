@@ -33,13 +33,13 @@ const (
 
 	NodeLabelingDelay = 2 * time.Minute
 
-	CatalogSourceCreationDelay   = 30 * time.Second
-	CatalogSourceReadyTimeout    = 4 * time.Minute
+	CatalogSourceCreationDelay        = 30 * time.Second
+	CatalogSourceCreationCheckInterval = 5 * time.Second
+	CatalogSourceReadyTimeout         = 4 * time.Minute
 	PackageManifestCheckInterval = 30 * time.Second
 	PackageManifestTimeout       = 5 * time.Minute
 	GpuBundleDeploymentTimeout   = 5 * time.Minute
 
-	OperatorDeploymentCreationDelay = 2 * time.Minute
 	DeploymentCreationCheckInterval = 30 * time.Second
 	DeploymentCreationTimeout       = 4 * time.Minute
 
@@ -58,7 +58,8 @@ const (
 
 	BurnLogCollectionPeriod = 500 * time.Second
 
-	CsvDeploymentSleepInterval = 2 * time.Minute
+	CsvDeploymentTimeout       = 5 * time.Minute
+	CsvDeploymentCheckInterval = 15 * time.Second
 
 	BurnPodPostUpgradeCreationTimeout = 5 * time.Minute
 
