@@ -35,72 +35,60 @@ and access, including `KUBECONFIG`, VPN, and target hardware access.
 | OpenShift clusters | `oc` with `KUBECONFIG` |
 | Cloud testbeds | The provider CLI: `aws`, `gcloud`, or `az` |
 
-## 1. Define the feature
+## Required ticket and phase routing
 
-Use [nvidia-verification-feature](../.agents/skills/nvidia-verification-feature/SKILL.md)
-with the source feature description and any Jira ticket. State the exact
-functionality to verify or automate and a definition of done for the ticket.
-The definition of done should say what deliverable or result means the goal is
-achieved; closing the ticket represents that outcome.
+A real Jira ticket is required for work through this workflow, whether created
+by a human, other tooling, or these skills. Read and reuse the appropriate
+ticket's goal, definition of done (DOD), plan, and useful hierarchy or artifacts.
+Infer the entry point from that state and skip already satisfied phases. Do not
+require a new parent Feature, decomposition, duplicate ticket, or field rewrite
+just to fit the workflow. Report blocked Jira access; it is not a no-ticket path.
 
-For manual verification, the deliverable is a result for **[named behavior]**
-on **[target setup]**. Automation may deliver test code covering that
-behavior, repeatable setup code, or a CI job, as defined by the ticket.
+For a new idea without a ticket, the feature phase may clarify the goal and
+draft a proposed ticket. Creation requires explicit user authorization. Wait for
+a real Jira key before verification planning or execution. Ticket presence is
+mandatory; CREATE, UPDATE, and decomposition are separate, optional actions.
+All Jira writes, including comments and transitions, need explicit user
+authorization for the intended changes.
 
-## 2. Plan the delivery
+| Need | Skill |
+|---|---|
+| Clarify an idea or ticket goal | [nvidia-verification-feature](../.agents/skills/nvidia-verification-feature/SKILL.md) |
+| Fill gaps in the verification plan | [nvidia-verification-plan](../.agents/skills/nvidia-verification-plan/SKILL.md) |
+| Propose independently tracked work, only if useful | [nvidia-verification-breakdown](../.agents/skills/nvidia-verification-breakdown/SKILL.md) |
+| Apply authorized Jira changes | [nvidia-jira-sync](../.agents/skills/nvidia-jira-sync/SKILL.md) |
+| Prepare one actual environment | [nvidia-testbed](../.agents/skills/nvidia-testbed/SKILL.md) |
+| Deliver test, reusable setup, or CI code | [nvidia-implement](../.agents/skills/nvidia-implement/SKILL.md) |
 
-Use [nvidia-verification-plan](../.agents/skills/nvidia-verification-plan/SKILL.md).
-Review feature documents, related work in the
-[NVIDIA Jira project](https://redhat.atlassian.net/browse/NVIDIA), existing
-code and tests, and current CI job definitions. Identify what already exists,
-what is missing, and what can be reused. Then choose scenarios, manual or
-automated methods, the testbed, and the work needed to meet the definition of
-done. Include certification criteria only when certification is the goal.
+These are routes, not mandatory sequential gates. Manual verification follows
+the plan without a coding phase; automation can also come first. Testbed and
+implementation work can overlap when new setup automation creates the needed
+environment. Apply certification criteria only when certification is the goal.
 
-## 3. Track the work in Jira when useful
+## Testbed sources and scenario eligibility
 
-Use [nvidia-verification-breakdown](../.agents/skills/nvidia-verification-breakdown/SKILL.md)
-to propose the smallest useful ticket hierarchy. The parent represents the
-feature goal. The NVIDIA project currently uses a Feature → Epic → Story/Task →
-Sub-task pattern; use existing applicable parents and only the levels needed.
-Children may track planning, the testbed, manual verification, test automation,
-CI job changes, or certification when these are separate pieces of work. Each
-ticket has its own definition of done.
+A testbed may come from hardware in the team's lab; hardware loaned by another
+team or company; automated cloud setup through a CI job; or ad-hoc cloud setup.
+Reuse an existing environment from any of these sources when suitable.
+Availability and source do not establish scenario eligibility: confirm the
+chosen scenario's hardware, software, and platform prerequisites, including
+applicable [repository supported setups](../README.md#supported-setups).
 
-Use [nvidia-jira-sync](../.agents/skills/nvidia-jira-sync/SKILL.md) when you
-want the proposed hierarchy created or updated in the NVIDIA Jira project.
-Confirm the actual parent links before creating tickets. The feature and a
-planning ticket can be tracked before the full plan; delivery tickets can be
-added after planning.
+## Operational agreement
 
-## 4. Prepare the testbed for this verification
+Before live changes, agree on the target, allowed disruptive or billable
+actions, and cleanup or retention. Execute within that scope without asking
+at every step; pause for agreement only when the target or scope must change.
+This is a short agreement, not an additional workflow phase or Jira write grant.
 
-When the plan calls for OpenShift, use
-[nvidia-testbed](../.agents/skills/nvidia-testbed/SKILL.md) to make one suitable
-environment available on the target hardware. It may be an
-existing cluster or one built in a lab, NVIDIA's lab through VPN, or a suitable
-cloud (AWS, GCP, Azure). Bare-metal setups commonly use the OpenShift Assisted
-Installer and BMC access. The outcome is a cluster the planned checks can use
-through `KUBECONFIG`.
+## Closing summary
 
-## 5. Implement automation when needed
-
-For a manual-only ticket, an engineer follows the plan on the testbed and
-records the results. The ticket closes when its definition of done is met.
-
-For a ticket that includes test code, reusable testbed setup code, or CI job
-configuration, use [nvidia-implement](../.agents/skills/nvidia-implement/SKILL.md)
-as an optional coding phase. It helps the engineer inspect existing work,
-make the scoped changes in the owning repository, validate them, and identify
-any remaining definition-of-done gaps. The deliverable may be Ginkgo code in
-`nvidia-ci`, setup automation, a job in `openshift/release`, or a combination.
-Normally, automation is implemented and validated in `nvidia-ci` before a job
-is added or updated to invoke it. Steps 4 and 5 can overlap: running new setup
-automation may create the specific cluster needed for verification.
-
-The [nvidia-verification](../.agents/skills/nvidia-verification/SKILL.md)
-skill can coordinate the phases. Each phase can also be used directly when the
-feature or testbed is already defined.
+Close manual and automation work with one short summary: what was delivered or
+checked; the actual setup and relevant versions (or that no environment was
+used); passed, failed, blocked, or not-run outcomes with evidence; and remaining
+DOD items. Distinguish automation delivered from behavior verified. Unrun or
+unsupported checks do not establish a pass; keep unverified DOD items explicit.
+Meeting the DOD does not itself authorize closing or updating the Jira ticket.
 
 ## Example requests
 

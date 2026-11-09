@@ -8,23 +8,20 @@ description: Start here to coordinate NVIDIA feature verification and automation
 Start here. This is the main entry point for the
 [NVIDIA feature verification and automation workflow](../../../docs/feature-verification-workflow.md).
 
-For new or unclear work, use
-[nvidia-verification-feature](../nvidia-verification-feature/SKILL.md) to
-define the functionality and Jira ticket's definition of done. Then use
-[nvidia-verification-plan](../nvidia-verification-plan/SKILL.md) to review
-existing work and plan checks, delivery, and environment needs.
+Read the required Jira ticket and reuse its goal, DOD, plan, and useful linked
+work, regardless of who created it. Use the guide's
+[phase routing](../../../docs/feature-verification-workflow.md#required-ticket-and-phase-routing)
+to choose the next unmet need, not to restart completed phases or impose a
+hierarchy. Report inaccessible ticket context as blocked.
 
-When the work needs Jira tickets, use
-[nvidia-verification-breakdown](../nvidia-verification-breakdown/SKILL.md) to
-draft the hierarchy and [nvidia-jira-sync](../nvidia-jira-sync/SKILL.md) to
-create or update it when requested.
+For a new idea without a ticket, route to
+[nvidia-verification-feature](../nvidia-verification-feature/SKILL.md) for
+clarification and a draft; wait for a real Jira key before planning or execution.
+Use breakdown only when independent tracking helps, and sync only for explicitly
+authorized Jira writes.
 
-When the plan calls for OpenShift, use
-[nvidia-testbed](../nvidia-testbed/SKILL.md) to prepare one specific setup.
-Manual verification may precede automation, or automation may be the first
-goal. Certification is an optional purpose of either path.
-
-Use [nvidia-implement](../nvidia-implement/SKILL.md) when a ticket calls for
-test code, reusable setup automation, or CI configuration. Manual-only
-verification follows the plan and ticket definition of done without an
-implementation phase.
+For manual verification, follow the ticket's plan on an eligible testbed. Use
+the shared [operational agreement](../../../docs/feature-verification-workflow.md#operational-agreement)
+before live changes and [closing summary](../../../docs/feature-verification-workflow.md#closing-summary)
+for results. Route code deliverables to the implementation skill; manual and
+automation may run in either order, with certification only when requested.
